@@ -41,6 +41,7 @@ class Listing(BaseModel):
   image_embedding: list = None
 
 # --- Attempt to run the Playwright browser install script ---
+# (If you haven't run 'npx playwright install chromium' manually, you'll see an error below.)
 if os.path.exists("install_browsers.sh"):
   try:
     subprocess.run(["bash", "install_browsers.sh"], check=True)
