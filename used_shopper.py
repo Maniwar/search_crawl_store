@@ -385,4 +385,3 @@ def run_similarity_search():
 
 
 run_similarity_search()
-</boltArtifact>
