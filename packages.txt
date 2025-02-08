@@ -1,4 +1,3 @@
-# System packages needed by Playwright's browsers
 libnss3
 libnspr4
 libatk1.0-0
@@ -17,7 +16,5 @@ libasound2
 libatspi2.0-0
 libwayland-client0
 libxcursor1
-
-# The older nodejs package (v12 on some distros) and npm
 nodejs
 npm
