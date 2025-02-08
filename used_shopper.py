@@ -1,34 +1,45 @@
+# app.py
+import os
+import subprocess
+
+# Optionally, disable Streamlit's file watcher to avoid torch conflicts.
+os.environ["STREAMLIT_WATCHER_DISABLED"] = "true"
+
 # st.set_page_config MUST be the very first Streamlit command.
 import streamlit as st
 st.set_page_config(page_title="Local Listings Shopping Session", layout="wide")
 
+# --- Attempt to run the Playwright browser install script ---
+if os.path.exists("install_browsers.sh"):
+    try:
+        subprocess.run(["bash", "install_browsers.sh"], check=True)
+        st.info("Playwright browsers installed successfully.")
+    except subprocess.CalledProcessError as e:
+        st.warning(f"Playwright installation command failed: {e}")
+    except Exception as e:
+        st.warning(f"Unexpected error during Playwright installation: {e}")
+else:
+    st.info("install_browsers.sh not found; skipping browser installation.")
+
+# Standard and third-party imports
 import re
 import asyncio
+import json
+from io import BytesIO
+from urllib.parse import urlencode
 import numpy as np
 import requests
-from io import BytesIO
 from PIL import Image
 import nest_asyncio
 import faiss
-from urllib.parse import urlencode
-from supabase import create_client, Client
-from crawl4ai import AsyncWebCrawler, CrawlerRunConfig, CacheMode
 import torch
+from supabase import create_client, Client
 from transformers import CLIPProcessor, CLIPModel
-from openai import OpenAI  # Official OpenAI API client
-import json
-import subprocess
+from crawl4ai import AsyncWebCrawler, CrawlerRunConfig, CacheMode
+from openai import OpenAI
 
 # Enable nested event loops for async code
 nest_asyncio.apply()
-
-# --- Attempt to Install Playwright's Chromium ---
-try:
-    subprocess.run(["npx", "playwright", "install", "chromium"], check=True)
-except FileNotFoundError:
-    st.warning("npx not found; skipping Playwright browser installation. Configure this via deployment settings if needed.")
-except Exception as e:
-    st.warning(f"Playwright installation error: {e}")
 
 # --- Initialize API Clients ---
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
@@ -50,16 +61,11 @@ search_description = st.text_input("Describe what you're looking for (e.g. 'affo
 
 # --- Dynamic Search Parameter Generation ---
 def generate_search_parameters_dynamic(description: str) -> dict:
-    """
-    Analyze the free-form description and output a JSON object with two keys:
-      - refined_query: a concise search phrase
-      - filters: an object with additional filter parameters.
-    """
     prompt = (
         "You are a dynamic search assistant. Given a free-form product search description, output a JSON object with exactly "
         "two keys: \"refined_query\" and \"filters\". The \"refined_query\" should be a concise phrase for the core search term. "
-        "The \"filters\" should be an object containing additional filter criteria (such as make, model, year_range, trim, price_range, etc.) "
-        "relevant to the product. If no extra filters apply, output an empty object for filters.\n\n"
+        "The \"filters\" should be an object containing additional filter criteria such as make, model, year_range, trim, price_range, "
+        "or any other parameters relevant to the product. If no extra filters apply, output an empty object for filters.\n\n"
         "Example:\n"
         "Input: \"affordable sports car\"\n"
         "Output: {\"refined_query\": \"affordable sports car\", \"filters\": {\"make\": \"Mazda\", \"model\": \"MX-5 Miata\", \"year_range\": \"2000-2010\", \"trim\": \"Base\", \"price_range\": \"5000-15000\"}}\n\n"
@@ -85,9 +91,6 @@ def generate_search_parameters_dynamic(description: str) -> dict:
         return {"refined_query": description, "filters": {}}
 
 def refine_query_from_candidate(candidate: dict) -> str:
-    """
-    Construct a refined query string by concatenating values of keys: make, model, year_range, trim.
-    """
     parts = []
     for key in ["make", "model", "year_range", "trim"]:
         value = candidate.get(key)
@@ -173,7 +176,7 @@ async def process_source(source: str, zip_code: str, candidate: dict) -> list:
             filtered_listings.append((source, listing))
     return filtered_listings
 
-# --- Embeddings ---
+# --- Embeddings Functions ---
 def get_text_embeddings(texts: list) -> np.ndarray:
     try:
         response = client.embeddings.create(
@@ -253,11 +256,11 @@ if st.button("Search Listings"):
     else:
         async def run_search():
             st.info("Generating dynamic search parameters...")
-            dynamic_params = generate_search_parameters_dynamic(search_description) if search_description else {"refined_query": search_description, "filters": {}}
+            dynamic_params = (generate_search_parameters_dynamic(search_description)
+                              if search_description else {"refined_query": search_description, "filters": {}})
             st.write("Dynamic search parameters:", dynamic_params)
             
             combined_results = []
-            # Wrap dynamic_params in a list if it is not already a list.
             candidates = dynamic_params if isinstance(dynamic_params, list) else [dynamic_params]
             for candidate in candidates:
                 for source in selected_sources:
