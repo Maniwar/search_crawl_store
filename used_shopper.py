@@ -1,4 +1,4 @@
-# st.set_page_config MUST be the first Streamlit command.
+# st.set_page_config MUST be the very first Streamlit command.
 import streamlit as st
 st.set_page_config(page_title="Local Listings Shopping Session", layout="wide")
 
@@ -58,8 +58,8 @@ def generate_search_parameters_dynamic(description: str) -> dict:
     prompt = (
         "You are a dynamic search assistant. Given a free-form product search description, output a JSON object with exactly "
         "two keys: \"refined_query\" and \"filters\". The \"refined_query\" should be a concise phrase for the core search term. "
-        "The \"filters\" should be an object containing additional filter criteria such as make, model, year_range, trim, price_range, "
-        "or any other parameters relevant to the product. If no extra filters apply, output an empty object for filters.\n\n"
+        "The \"filters\" should be an object containing additional filter criteria (such as make, model, year_range, trim, price_range, etc.) "
+        "relevant to the product. If no extra filters apply, output an empty object for filters.\n\n"
         "Example:\n"
         "Input: \"affordable sports car\"\n"
         "Output: {\"refined_query\": \"affordable sports car\", \"filters\": {\"make\": \"Mazda\", \"model\": \"MX-5 Miata\", \"year_range\": \"2000-2010\", \"trim\": \"Base\", \"price_range\": \"5000-15000\"}}\n\n"
@@ -93,7 +93,6 @@ def refine_query_from_candidate(candidate: dict) -> str:
         value = candidate.get(key)
         if value and value != "null":
             parts.append(str(value))
-    # Fallback: use refined_query if no extra keys are provided.
     if not parts:
         parts.append(candidate.get("refined_query", ""))
     return " ".join(parts).strip()
@@ -258,7 +257,7 @@ if st.button("Search Listings"):
             st.write("Dynamic search parameters:", dynamic_params)
             
             combined_results = []
-            # For each candidate option (if dynamic_params is a single object, wrap it in a list)
+            # Wrap dynamic_params in a list if it is not already a list.
             candidates = dynamic_params if isinstance(dynamic_params, list) else [dynamic_params]
             for candidate in candidates:
                 for source in selected_sources:
