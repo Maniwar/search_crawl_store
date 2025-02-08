@@ -155,7 +155,9 @@ async def crawl_listings(url: str) -> str:
       result = await crawler.arun(url=url, config=run_config)
       return result.markdown_v2.fit_markdown
   except Exception as e:
-    st.error(f"Error during crawling at URL {url}: {e}\nPlease ensure that Playwright browsers are installed and in your PATH.")
+    error_message = f"Error during crawling at URL {url}: {e}"
+    st.error(error_message)
+    st.error("Please ensure that Playwright browsers are installed and in your PATH. If issues persist, try running 'npx playwright install chromium' in the shell.")
     return ""
 
 @st.cache_data
@@ -377,3 +379,4 @@ def run_similarity_search():
 
 
 run_similarity_search()
+</boltArtifact>
