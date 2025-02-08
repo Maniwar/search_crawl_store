@@ -28,14 +28,19 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 # Configure the Streamlit page
 st.set_page_config(page_title="Local Listings Shopping Session", layout="wide")
 st.title("Local Listings Shopping Session")
-st.write("Find authentic listings from Facebook Marketplace or Craigslist in your area—and let AI guide your shopping session!")
+st.write("Find authentic listings from Facebook Marketplace and/or Craigslist in your area—and let AI guide your shopping session!")
 
 # -- User Inputs --
-source = st.selectbox("Select Source", options=["Facebook Marketplace", "Craigslist"])
+# Use multiselect so you can pick one or both sources.
+selected_sources = st.multiselect(
+    "Select Sources", 
+    options=["Facebook Marketplace", "Craigslist"],
+    default=["Craigslist", "Facebook Marketplace"]
+)
 zip_code = st.text_input("Enter your Zip Code (5 digits):", value="60614")
 keyword = st.text_input("Optional: Enter a product keyword (e.g., 'bike', 'sofa'):")
 
-# Build a target URL based on the selected source
+# Function to get the target URL for a given source
 def construct_target_url(source: str, zip_code: str, keyword: str) -> str:
     if source == "Craigslist":
         params = {"postal": zip_code}
@@ -51,9 +56,6 @@ def construct_target_url(source: str, zip_code: str, keyword: str) -> str:
     else:
         return ""
 
-target_url = construct_target_url(source, zip_code, keyword)
-st.write("Target URL:", target_url)
-
 # -- Asynchronous Functions for Scraping and Filtering Listings --
 
 async def crawl_listings(url: str) -> str:
@@ -63,7 +65,7 @@ async def crawl_listings(url: str) -> str:
     )
     async with AsyncWebCrawler() as crawler:
         result = await crawler.arun(url=url, config=run_config)
-        # For demo purposes, assume the result is a Markdown string
+        # For demo purposes, we assume the result is a Markdown string
         return result.markdown_v2.fit_markdown
 
 async def is_listing_real(listing_text: str) -> bool:
@@ -93,19 +95,20 @@ def extract_zip(text: str) -> str:
     match = re.search(r"\b(\d{5})\b", text)
     return match.group(1) if match else ""
 
-async def process_url(url: str, desired_zip: str, keyword: str) -> list:
+async def process_source(source: str, zip_code: str, keyword: str) -> list:
+    url = construct_target_url(source, zip_code, keyword)
     page_text = await crawl_listings(url)
-    # Split text into candidate listings (assume listings are separated by two newlines)
+    # Assume candidate listings are separated by two newlines
     candidate_listings = [item.strip() for item in page_text.split("\n\n") if item.strip()]
     filtered_listings = []
     for listing in candidate_listings:
-        listing_zip = extract_zip(listing)
-        if listing_zip != desired_zip:
+        if extract_zip(listing) != zip_code:
             continue
         if keyword and keyword.lower() not in listing.lower():
             continue
         if await is_listing_real(listing):
-            filtered_listings.append(listing)
+            # Tag the listing with its source
+            filtered_listings.append((source, listing))
     return filtered_listings
 
 # -- Functions for Computing Embeddings --
@@ -149,8 +152,6 @@ def store_listing_metadata(listing: dict):
     except Exception as e:
         st.error(f"Error storing listing in Supabase: {e}")
 
-# (Note: Ensure the 'listings' table exists manually in Supabase using the provided SQL)
-
 # -- Build FAISS Index --
 def build_faiss_index(embeddings: np.ndarray) -> faiss.IndexFlatL2:
     if embeddings.size == 0:
@@ -169,6 +170,7 @@ def render_listing_card(listing: dict):
     text = listing.get("listing_text", "")
     title = text[:60] + ("..." if len(text) > 60 else "")
     zip_found = listing.get("zip_code", "")
+    source = listing.get("source", "Unknown")
     card_html = f"""
     <div style="
          border: 1px solid #ccc;
@@ -178,27 +180,35 @@ def render_listing_card(listing: dict):
          box-shadow: 2px 2px 8px rgba(0,0,0,0.1);
          background-color: #fff;">
       <h4 style="margin-bottom: 4px;">{title}</h4>
-      <p style="font-size: 14px; color: #555;">Zip Code: {zip_found}</p>
+      <p style="font-size: 14px; color: #555;">Source: {source} | Zip Code: {zip_found}</p>
       <p style="font-size: 13px; color: #333;">{text[:200]}{"..." if len(text) > 200 else ""}</p>
     </div>
     """
     st.markdown(card_html, unsafe_allow_html=True)
 
 # -- Main Execution --
-
 if st.button("Search Listings"):
-    if not target_url or not zip_code or len(zip_code) != 5 or not zip_code.isdigit():
-        st.error("Please enter a valid target URL and a 5-digit zip code.")
+    if not selected_sources or not zip_code or len(zip_code) != 5 or not zip_code.isdigit():
+        st.error("Please select at least one source and enter a valid 5-digit zip code.")
     else:
         st.info("Scraping and filtering listings. Please wait...")
         try:
-            real_listings = asyncio.run(process_url(target_url, zip_code, keyword))
-            st.success(f"Found {len(real_listings)} authentic listings matching zip code {zip_code}!")
+            # Run the crawl concurrently for all selected sources.
+            results = await asyncio.gather(*[
+                process_source(source, zip_code, keyword) for source in selected_sources
+            ])
+            # Combine results from all sources
+            combined_results = []
+            for source_results in results:
+                for source, listing in source_results:
+                    combined_results.append((source, listing))
             
-            # For each listing, optionally extract an image URL if present.
+            st.success(f"Found {len(combined_results)} authentic listings matching zip code {zip_code}!")
+            
+            # For each listing, enrich with embeddings and optionally extract an image URL.
             image_url_pattern = re.compile(r'(https?://\S+\.(jpg|jpeg|png))', re.IGNORECASE)
             enriched_listings = []
-            for listing in real_listings:
+            for source, listing in combined_results:
                 image_url = None
                 match = image_url_pattern.search(listing)
                 if match:
@@ -210,10 +220,10 @@ if st.button("Search Listings"):
                     "listing_text": listing,
                     "image_url": image_url,
                 }
-                # Compute text embedding using the client
+                # Compute text embedding
                 text_emb = get_text_embeddings([listing])
-                listing_data["text_embedding"] = text_emb.tolist()[0]  # store as list
-                # Optionally, compute image embedding if image_url exists
+                listing_data["text_embedding"] = text_emb.tolist()[0]
+                # Optionally, compute image embedding if available
                 if image_url:
                     img_emb = get_image_embedding(image_url)
                     listing_data["image_embedding"] = img_emb.tolist() if img_emb is not None else None
@@ -222,14 +232,14 @@ if st.button("Search Listings"):
                 enriched_listings.append(listing_data)
                 store_listing_metadata(listing_data)
             
-            # Build FAISS index for text embeddings for in-session similarity search
+            # Build FAISS index for text embeddings
             text_embeddings = np.array([np.array(d["text_embedding"], dtype="float32") for d in enriched_listings])
             text_index = build_faiss_index(text_embeddings)
             
             st.session_state["listings"] = enriched_listings
             st.session_state["text_faiss_index"] = text_index
 
-            # Display listings as cards in a grid layout
+            # Display listings in a grid layout
             num_columns = 3
             cols = st.columns(num_columns)
             for idx, listing in enumerate(enriched_listings):
