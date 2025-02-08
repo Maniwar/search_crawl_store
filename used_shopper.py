@@ -14,24 +14,35 @@ import torch
 from transformers import CLIPProcessor, CLIPModel
 from openai import OpenAI  # New official API client class
 import json
+import subprocess
+import os
 
 # Enable nested event loops for async code in Streamlit
 nest_asyncio.apply()
 
-# Initialize the OpenAI client using your secret API key
+# --- Ensure Playwright Browsers Are Installed ---
+# This command installs Chromium if it is not already present.
+try:
+    # Run the command "playwright install chromium"
+    subprocess.run(["playwright", "install", "chromium"], check=True)
+except Exception as e:
+    st.error(f"Error installing browsers via Playwright: {e}")
+
+# --- Initialize Clients ---
+# Initialize the OpenAI client using your secret API key.
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
-# Initialize Supabase client
+# Initialize Supabase client.
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_ANON_KEY = st.secrets["SUPABASE_ANON_KEY"]
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 
-# Configure the Streamlit page
+# Configure the Streamlit page.
 st.set_page_config(page_title="Local Listings Shopping Session", layout="wide")
 st.title("Local Listings Shopping Session")
 st.write("Find authentic listings from Facebook Marketplace and Craigslist in your area—and let AI guide your shopping session!")
 
-# -- User Inputs --
+# --- User Inputs ---
 selected_sources = st.multiselect(
     "Select Sources", 
     options=["Facebook Marketplace", "Craigslist"],
@@ -57,7 +68,7 @@ def generate_search_parameters(description: str) -> dict:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "You output only valid JSON with the specified keys."},
+                {"role": "system", "content": "Output only valid JSON with the keys: query, min_price, and max_price."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.3,
@@ -110,7 +121,7 @@ async def is_listing_real(listing_text: str) -> bool:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "You are a listing authenticity classifier. Answer only with 'real' or 'fake'."},
+                {"role": "system", "content": "Answer only with 'real' or 'fake'."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.0,
@@ -287,5 +298,5 @@ def run_similarity_search():
                     if i < len(st.session_state["listings"]):
                         render_listing_card(st.session_state["listings"][i])
         asyncio.run(do_similarity())
-
+        
 run_similarity_search()
