@@ -1,3 +1,4 @@
+# app.py
 import os
 import subprocess
 import re
@@ -12,13 +13,13 @@ import requests
 from PIL import Image
 import nest_asyncio
 import faiss
+# Remove st.set_option for file watcher; using environment variable instead.
 os.environ["STREAMLIT_WATCHER_DISABLED"] = "true"
 import torch
 from supabase import create_client, Client
 from transformers import CLIPProcessor, CLIPModel
 from crawl4ai import AsyncWebCrawler, CrawlerRunConfig, CacheMode
 from openai import OpenAI
-from pydantic import BaseModel, ValidationError
 
 # Enable nested event loops for async code to avoid errors
 nest_asyncio.apply()
@@ -26,40 +27,31 @@ nest_asyncio.apply()
 # st.set_page_config MUST be the very first Streamlit command.
 st.set_page_config(page_title="Local Listings Shopping Session", layout="wide")
 
-# --- Pydantic Models ---
-class SearchParameters(BaseModel):
-  refined_query: str
-  filters: dict = {}
-
-class Listing(BaseModel):
-  source: str
-  zip_code: str
-  keyword: str
-  listing_text: str
-  image_url: str = None
-  text_embedding: list
-  image_embedding: list = None
-
-# --- Informative message for Playwright browsers ---
-# Do not try to auto-install from within the code on Streamlit Cloud.
-# Instead, if Playwright browsers are missing, instruct the user to ensure that
-# the "setup.sh" file runs as part of the deployment. The setup.sh file should contain:
-#
-#   #!/bin/bash
-#   npx playwright install chromium
-#
-# This file must be committed to your repository and configured by your developer dashboard.
-
+# --- Attempt to run the Playwright browser install script ---
 if os.path.exists("install_browsers.sh"):
   try:
     subprocess.run(["bash", "install_browsers.sh"], check=True)
     st.info("Playwright browsers installed successfully via install_browsers.sh.")
   except subprocess.CalledProcessError as e:
-    st.warning(f"Playwright installation command from install_browsers.sh failed: {e}")
+    st.warning(f"Playwright installation command failed: {e}")
   except Exception as e:
     st.warning(f"Unexpected error during Playwright installation: {e}")
 else:
-  st.info("No install_browsers.sh found; if browsers are missing, ensure setup.sh is executed during deployment.")
+  st.info("install_browsers.sh not found; skipping browser installation.")
+
+# --- Function to check and install Playwright browsers ---
+def check_playwright_browsers():
+  # Define expected browser executable path.
+  browser_path = os.path.expanduser("~/.cache/ms-playwright/chromium-1155/chrome-linux/chrome")
+  if not os.path.exists(browser_path):
+    st.warning("Playwright browsers are missing. Attempting to install them now...")
+    try:
+      subprocess.run(["npx", "playwright", "install", "chromium"], check=True)
+      st.success("Playwright browsers installed successfully via npx playwright install chromium.")
+    except Exception as e:
+      st.error(f"Failed to install Playwright browsers automatically: {e}. Please run 'npx playwright install chromium' manually.")
+      
+check_playwright_browsers()
 
 # Initialize API Clients
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
@@ -72,7 +64,7 @@ st.write("Find authentic listings from Facebook Marketplace and Craigslist in yo
 
 # --- User Inputs ---
 selected_sources = st.multiselect(
-  "Select Sources",
+  "Select Sources", 
   options=["Facebook Marketplace", "Craigslist"],
   default=["Craigslist", "Facebook Marketplace"]
 )
@@ -80,7 +72,7 @@ zip_code = st.text_input("Enter your Zip Code (5 digits):", value="60614")
 search_description = st.text_input("Describe what you're looking for (e.g. 'affordable sports car'):")
 
 # --- Dynamic Search Parameter Generation ---
-def generate_search_parameters_dynamic(description: str) -> SearchParameters:
+def generate_search_parameters_dynamic(description: str) -> dict:
   prompt = (
     "You are a dynamic search assistant. Given a free-form product search description, output a JSON object with exactly "
     "two keys: \"refined_query\" and \"filters\". The \"refined_query\" should be a concise phrase for the core search term. "
@@ -104,13 +96,11 @@ def generate_search_parameters_dynamic(description: str) -> SearchParameters:
       max_tokens=200
     )
     text = response.choices[0].message.content.strip()
-    data = json.loads(text)
-    # Validate using Pydantic
-    params = SearchParameters(**data)
+    params = json.loads(text)
     return params
-  except (ValidationError, Exception) as e:
+  except Exception as e:
     st.error(f"Error generating dynamic search parameters: {e}")
-    return SearchParameters(refined_query=description, filters={})
+    return {"refined_query": description, "filters": {}}
 
 def refine_query_from_candidate(candidate: dict) -> str:
   parts = []
@@ -157,10 +147,7 @@ async def crawl_listings(url: str) -> str:
       result = await crawler.arun(url=url, config=run_config)
       return result.markdown_v2.fit_markdown
   except Exception as e:
-    error_msg = str(e)
-    st.error(f"Error during crawling at URL {url}: {error_msg}")
-    if "BrowserType.launch" in error_msg:
-      st.warning("Playwright browsers are missing. Please ensure 'setup.sh' runs during deployment to install them.")
+    st.error(f"Error during crawling at URL {url}: {e}\nPlease ensure that Playwright browsers are installed (try running 'npx playwright install chromium').")
     return ""
 
 async def is_listing_real(listing_text: str) -> bool:
@@ -285,11 +272,12 @@ if st.button("Search Listings"):
   else:
     async def run_search():
       st.info("Generating dynamic search parameters...")
-      dynamic_params = generate_search_parameters_dynamic(search_description) if search_description else SearchParameters(refined_query=search_description, filters={})
-      st.write("Dynamic search parameters:", dynamic_params.dict())
+      dynamic_params = (generate_search_parameters_dynamic(search_description)
+                        if search_description else {"refined_query": search_description, "filters": {}})
+      st.write("Dynamic search parameters:", dynamic_params)
       
       combined_results = []
-      candidates = [dynamic_params.dict()]
+      candidates = dynamic_params if isinstance(dynamic_params, list) else [dynamic_params]
       for candidate in candidates:
         for source in selected_sources:
           results = await process_source(source, zip_code, candidate)
@@ -307,7 +295,7 @@ if st.button("Search Listings"):
         listing_data = {
           "source": source,
           "zip_code": zip_code,
-          "keyword": dynamic_params.refined_query,
+          "keyword": dynamic_params.get("refined_query", ""),
           "listing_text": listing,
           "image_url": image_url,
         }
@@ -318,12 +306,8 @@ if st.button("Search Listings"):
           listing_data["image_embedding"] = img_emb.tolist() if img_emb is not None else None
         else:
           listing_data["image_embedding"] = None
-        try:
-          validated_listing = Listing(**listing_data)
-          enriched_listings.append(validated_listing.dict())
-          store_listing_metadata(validated_listing.dict())
-        except Exception as e:
-          st.error(f"Listing validation error: {e}")
+        enriched_listings.append(listing_data)
+        store_listing_metadata(listing_data)
       
       text_embeddings = np.array([np.array(d["text_embedding"], dtype="float32") for d in enriched_listings])
       text_index = build_faiss_index(text_embeddings)
