@@ -13,8 +13,8 @@ import requests
 from PIL import Image
 import nest_asyncio
 import faiss
-# Disable Streamlit file watcher to suppress torch __path__ errors
-st.set_option("server.fileWatcherType", "none")
+# Removed st.set_option("server.fileWatcherType", "none")
+os.environ["STREAMLIT_WATCHER_DISABLED"] = "true"
 import torch
 from supabase import create_client, Client
 from transformers import CLIPProcessor, CLIPModel
@@ -23,9 +23,6 @@ from openai import OpenAI
 
 # Enable nested event loops for async code to avoid errors
 nest_asyncio.apply()
-
-# Optionally, disable Streamlit's file watcher to avoid torch conflicts.
-os.environ["STREAMLIT_WATCHER_DISABLED"] = "true"
 
 # st.set_page_config MUST be the very first Streamlit command.
 st.set_page_config(page_title="Local Listings Shopping Session", layout="wide")
