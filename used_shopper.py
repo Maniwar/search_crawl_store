@@ -40,18 +40,26 @@ class Listing(BaseModel):
   text_embedding: list
   image_embedding: list = None
 
-# --- Attempt to run the Playwright browser install script ---
-# (If you haven't run 'npx playwright install chromium' manually, you'll see an error below.)
+# --- Informative message for Playwright browsers ---
+# Do not try to auto-install from within the code on Streamlit Cloud.
+# Instead, if Playwright browsers are missing, instruct the user to ensure that
+# the "setup.sh" file runs as part of the deployment. The setup.sh file should contain:
+#
+#   #!/bin/bash
+#   npx playwright install chromium
+#
+# This file must be committed to your repository and configured by your developer dashboard.
+
 if os.path.exists("install_browsers.sh"):
   try:
     subprocess.run(["bash", "install_browsers.sh"], check=True)
-    st.info("Playwright browsers installed successfully.")
+    st.info("Playwright browsers installed successfully via install_browsers.sh.")
   except subprocess.CalledProcessError as e:
-    st.warning(f"Playwright installation command failed: {e}")
+    st.warning(f"Playwright installation command from install_browsers.sh failed: {e}")
   except Exception as e:
     st.warning(f"Unexpected error during Playwright installation: {e}")
 else:
-  st.info("install_browsers.sh not found; skipping browser installation.")
+  st.info("No install_browsers.sh found; if browsers are missing, ensure setup.sh is executed during deployment.")
 
 # Initialize API Clients
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
@@ -152,7 +160,7 @@ async def crawl_listings(url: str) -> str:
     error_msg = str(e)
     st.error(f"Error during crawling at URL {url}: {error_msg}")
     if "BrowserType.launch" in error_msg:
-      st.warning("Automatic install attempt failed. Please run 'npx playwright install chromium' manually to download necessary browsers.")
+      st.warning("Playwright browsers are missing. Please ensure 'setup.sh' runs during deployment to install them.")
     return ""
 
 async def is_listing_real(listing_text: str) -> bool:
