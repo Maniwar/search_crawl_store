@@ -1,4 +1,3 @@
-# app.py
 import os
 import subprocess
 import re
@@ -7,69 +6,53 @@ import json
 from io import BytesIO
 from urllib.parse import urlencode
 
-# Disable file watcher before importing torch or streamlit.
-os.environ["STREAMLIT_WATCHER_DISABLED"] = "true"
-
-# Import torch early to avoid __path__ errors.
-import torch
-
 import streamlit as st
 import numpy as np
 import requests
 from PIL import Image
 import nest_asyncio
 import faiss
+os.environ["STREAMLIT_WATCHER_DISABLED"] = "true"
+import torch
 from supabase import create_client, Client
 from transformers import CLIPProcessor, CLIPModel
 from crawl4ai import AsyncWebCrawler, CrawlerRunConfig, CacheMode
 from openai import OpenAI
+from pydantic import BaseModel, ValidationError
 
-# Enable nested event loops for async code.
+# Enable nested event loops for async code to avoid errors
 nest_asyncio.apply()
 
 # st.set_page_config MUST be the very first Streamlit command.
 st.set_page_config(page_title="Local Listings Shopping Session", layout="wide")
 
-# --- One-time Playwright browser installation ---
-def install_playwright_browser():
-  home = os.getenv("HOME")
-  # Path where the Chromium executable should be installed.
-  browser_path = os.path.join(home, ".cache", "ms-playwright", "chromium-1155", "chrome-linux", "chrome")
-  if os.path.exists(browser_path):
-    st.info("Playwright browsers already installed.")
-    return
-  # Check Node.js version.
-  try:
-    node_version = subprocess.check_output(["node", "-v"], text=True).strip()
-    major_version = int(node_version.lstrip("v").split(".")[0])
-  except Exception as e:
-    st.error(f"Error checking Node.js version: {e}")
-    return
-  if major_version < 14:
-    st.error(f"Playwright requires Node.js 14 or higher. You are running Node.js {node_version}. Please update your Node.js version.")
-    return
-  try:
-    subprocess.run(["npx", "playwright", "install", "chromium"], check=True)
-    st.info("Playwright browsers installed successfully (via npx playwright install chromium).")
-  except Exception as e:
-    st.error(f"Failed to install Playwright browsers: {e}")
+# --- Pydantic Models ---
+class SearchParameters(BaseModel):
+  refined_query: str
+  filters: dict = {}
 
-# Run the browser installation (once per app run).
-install_playwright_browser()
+class Listing(BaseModel):
+  source: str
+  zip_code: str
+  keyword: str
+  listing_text: str
+  image_url: str = None
+  text_embedding: list
+  image_embedding: list = None
 
-# Optionally run install_browsers.sh if available.
+# --- Attempt to run the Playwright browser install script ---
 if os.path.exists("install_browsers.sh"):
   try:
     subprocess.run(["bash", "install_browsers.sh"], check=True)
-    st.info("install_browsers.sh executed successfully.")
+    st.info("Playwright browsers installed successfully.")
   except subprocess.CalledProcessError as e:
-    st.warning(f"install_browsers.sh command failed: {e}")
+    st.warning(f"Playwright installation command failed: {e}")
   except Exception as e:
-    st.warning(f"Unexpected error running install_browsers.sh: {e}")
+    st.warning(f"Unexpected error during Playwright installation: {e}")
 else:
-  st.info("install_browsers.sh not found; skipping.")
+  st.info("install_browsers.sh not found; skipping browser installation.")
 
-# --- Initialize API Clients ---
+# Initialize API Clients
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_ANON_KEY = st.secrets["SUPABASE_ANON_KEY"]
@@ -88,7 +71,7 @@ zip_code = st.text_input("Enter your Zip Code (5 digits):", value="60614")
 search_description = st.text_input("Describe what you're looking for (e.g. 'affordable sports car'):")
 
 # --- Dynamic Search Parameter Generation ---
-def generate_search_parameters_dynamic(description: str) -> dict:
+def generate_search_parameters_dynamic(description: str) -> SearchParameters:
   prompt = (
     "You are a dynamic search assistant. Given a free-form product search description, output a JSON object with exactly "
     "two keys: \"refined_query\" and \"filters\". The \"refined_query\" should be a concise phrase for the core search term. "
@@ -112,11 +95,13 @@ def generate_search_parameters_dynamic(description: str) -> dict:
       max_tokens=200
     )
     text = response.choices[0].message.content.strip()
-    params = json.loads(text)
+    data = json.loads(text)
+    # Validate using Pydantic
+    params = SearchParameters(**data)
     return params
-  except Exception as e:
+  except (ValidationError, Exception) as e:
     st.error(f"Error generating dynamic search parameters: {e}")
-    return {"refined_query": description, "filters": {}}
+    return SearchParameters(refined_query=description, filters={})
 
 def refine_query_from_candidate(candidate: dict) -> str:
   parts = []
@@ -288,12 +273,11 @@ if st.button("Search Listings"):
   else:
     async def run_search():
       st.info("Generating dynamic search parameters...")
-      dynamic_params = (generate_search_parameters_dynamic(search_description)
-                        if search_description else {"refined_query": search_description, "filters": {}})
-      st.write("Dynamic search parameters:", dynamic_params)
+      dynamic_params = generate_search_parameters_dynamic(search_description) if search_description else SearchParameters(refined_query=search_description, filters={})
+      st.write("Dynamic search parameters:", dynamic_params.dict())
       
       combined_results = []
-      candidates = dynamic_params if isinstance(dynamic_params, list) else [dynamic_params]
+      candidates = [dynamic_params.dict()]
       for candidate in candidates:
         for source in selected_sources:
           results = await process_source(source, zip_code, candidate)
@@ -311,7 +295,7 @@ if st.button("Search Listings"):
         listing_data = {
           "source": source,
           "zip_code": zip_code,
-          "keyword": dynamic_params.get("refined_query", ""),
+          "keyword": dynamic_params.refined_query,
           "listing_text": listing,
           "image_url": image_url,
         }
@@ -322,8 +306,12 @@ if st.button("Search Listings"):
           listing_data["image_embedding"] = img_emb.tolist() if img_emb is not None else None
         else:
           listing_data["image_embedding"] = None
-        enriched_listings.append(listing_data)
-        store_listing_metadata(listing_data)
+        try:
+          validated_listing = Listing(**listing_data)
+          enriched_listings.append(validated_listing.dict())
+          store_listing_metadata(validated_listing.dict())
+        except Exception as e:
+          st.error(f"Listing validation error: {e}")
       
       text_embeddings = np.array([np.array(d["text_embedding"], dtype="float32") for d in enriched_listings])
       text_index = build_faiss_index(text_embeddings)
