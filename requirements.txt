@@ -1,0 +1,11 @@
+streamlit
+openai
+crawl4ai
+nest_asyncio
+faiss-cpu
+numpy
+requests
+Pillow
+supabase
+transformers
+torch
