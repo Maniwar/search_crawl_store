@@ -1,22 +1,24 @@
 import re
 import asyncio
-import openai
-import streamlit as st
-from urllib.parse import urlencode
-from crawl4ai import AsyncWebCrawler, CrawlerRunConfig, CacheMode
-import nest_asyncio
-import faiss
 import numpy as np
 import requests
-from PIL import Image
 from io import BytesIO
+from PIL import Image
+import streamlit as st
+import nest_asyncio
+import faiss
+from urllib.parse import urlencode
 from supabase import create_client, Client
+from crawl4ai import AsyncWebCrawler, CrawlerRunConfig, CacheMode
+import torch
+from transformers import CLIPProcessor, CLIPModel
+from openai import OpenAI  # New official API client class
 
 # Enable nested event loops for async code in Streamlit
 nest_asyncio.apply()
 
-# Configure API keys from Streamlit secrets
-openai_api_key = st.secrets["OPENAI_API_KEY"]
+# Initialize the new OpenAI client using your secret API key
+client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 # Initialize Supabase client
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
@@ -39,7 +41,7 @@ def construct_target_url(source: str, zip_code: str, keyword: str) -> str:
         params = {"postal": zip_code}
         if keyword:
             params["query"] = keyword
-        # Example: using a generic Craigslist domain (adjust as needed)
+        # Example using a generic Craigslist domain (adjust as needed)
         return f"https://sfbay.craigslist.org/search/sss?{urlencode(params)}"
     elif source == "Facebook Marketplace":
         params = {"postal": zip_code}
@@ -61,7 +63,7 @@ async def crawl_listings(url: str) -> str:
     )
     async with AsyncWebCrawler() as crawler:
         result = await crawler.arun(url=url, config=run_config)
-        # For demo purposes, we assume the result is a Markdown string
+        # For demo purposes, assume the result is a Markdown string
         return result.markdown_v2.fit_markdown
 
 async def is_listing_real(listing_text: str) -> bool:
@@ -72,7 +74,8 @@ async def is_listing_real(listing_text: str) -> bool:
         f"Listing:\n{listing_text}\n\nAnswer:"
     )
     try:
-        response = openai.ChatCompletion.create(
+        # Use the client instance to create a chat completion using the gpt-4o-mini model
+        response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": "You are a listing authenticity classifier. Answer only with 'real' or 'fake'."},
@@ -108,21 +111,19 @@ async def process_url(url: str, desired_zip: str, keyword: str) -> list:
 
 # -- Functions for Computing Embeddings --
 
-# Text Embeddings using OpenAI (using text-embedding-ada-002 here; replace with your choice if needed)
 def get_text_embeddings(texts: list) -> np.ndarray:
     try:
-        response = openai.Embedding.create(
+        response = client.embeddings.create(
             model="text-embedding-ada-002",
             input=texts
         )
-        embeddings = [record['embedding'] for record in response['data']]
-        return np.array(embeddings).astype('float32')
+        embeddings = [record["embedding"] for record in response["data"]]
+        return np.array(embeddings).astype("float32")
     except Exception as e:
         st.error(f"Error computing text embeddings: {e}")
-        return np.empty((0, 1536), dtype='float32')
+        return np.empty((0, 1536), dtype="float32")
 
-# Image Embeddings using CLIP (for listings with image URLs)
-from transformers import CLIPProcessor, CLIPModel
+# Load CLIP model and processor for image embeddings
 clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
 clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 clip_model.eval()
@@ -134,15 +135,15 @@ def get_image_embedding(image_url: str) -> np.ndarray:
         inputs = clip_processor(images=image, return_tensors="pt")
         with torch.no_grad():
             embedding = clip_model.get_image_features(**inputs)
+        # Normalize and convert to numpy array
         embedding = torch.nn.functional.normalize(embedding, p=2, dim=-1)
-        return embedding.cpu().numpy().astype('float32')[0]
+        return embedding.cpu().numpy().astype("float32")[0]
     except Exception as e:
         st.error(f"Error processing image from {image_url}: {e}")
         return None
 
 # -- Supabase Integration: Store Listing Metadata --
 def store_listing_metadata(listing: dict):
-    # listing dict should include: source, zip_code, keyword, listing_text, image_url (optional)
     try:
         response = supabase.table("listings").insert(listing).execute()
         if response.get("error"):
@@ -150,10 +151,7 @@ def store_listing_metadata(listing: dict):
     except Exception as e:
         st.error(f"Error storing listing in Supabase: {e}")
 
-# For demo purposes, ensure the "listings" table exists.
-# In production, create and manage your tables in Supabase.
 def ensure_listings_table():
-    # This is a simple check; in production you might use migrations.
     query = """
     CREATE TABLE IF NOT EXISTS listings (
       id SERIAL PRIMARY KEY,
@@ -219,11 +217,9 @@ if st.button("Search Listings"):
             st.success(f"Found {len(real_listings)} authentic listings matching zip code {zip_code}!")
             
             # For each listing, optionally extract an image URL if present.
-            # (Here we use a simple regex to find a URL ending in .jpg or .png.)
             image_url_pattern = re.compile(r'(https?://\S+\.(jpg|jpeg|png))', re.IGNORECASE)
             enriched_listings = []
             for listing in real_listings:
-                # Attempt to extract an image URL from the listing text.
                 image_url = None
                 match = image_url_pattern.search(listing)
                 if match:
@@ -234,9 +230,8 @@ if st.button("Search Listings"):
                     "keyword": keyword,
                     "listing_text": listing,
                     "image_url": image_url,
-                    # We will fill embeddings later.
                 }
-                # Compute text embedding
+                # Compute text embedding using the new client
                 text_emb = get_text_embeddings([listing])
                 listing_data["text_embedding"] = text_emb.tolist()[0]  # store as list
                 # Optionally, compute image embedding if image_url exists
@@ -246,7 +241,6 @@ if st.button("Search Listings"):
                 else:
                     listing_data["image_embedding"] = None
                 enriched_listings.append(listing_data)
-                # Store in Supabase
                 store_listing_metadata(listing_data)
             
             # Build FAISS index for text embeddings for in-session similarity search
@@ -271,8 +265,7 @@ query_text = st.text_input("Enter text to search for similar listings within thi
 if query_text and "text_faiss_index" in st.session_state:
     try:
         query_emb = get_text_embeddings([query_text])
-        query_emb = np.array(query_emb, dtype="float32")
-        query_emb = query_emb.reshape(1, -1)
+        query_emb = np.array(query_emb, dtype="float32").reshape(1, -1)
         index: faiss.IndexFlatL2 = st.session_state["text_faiss_index"]
         if index is None or index.ntotal == 0:
             st.warning("No listings available for similarity search.")
