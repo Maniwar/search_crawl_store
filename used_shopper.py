@@ -151,15 +151,7 @@ async def crawl_listings(url: str) -> str:
     error_msg = str(e)
     st.error(f"Error during crawling at URL {url}: {error_msg}")
     if "BrowserType.launch" in error_msg:
-      st.warning("Attempting to install Playwright browsers automatically...")
-      try:
-        subprocess.run(["npx", "playwright", "install", "chromium"], check=True)
-        # Retry once after installation
-        async with AsyncWebCrawler() as crawler:
-          result = await crawler.arun(url=url, config=run_config)
-          return result.markdown_v2.fit_markdown
-      except Exception as e2:
-        st.error(f"Automatic playwright installation failed: {e2}")
+      st.warning("Automatic install attempt failed. Please run 'npx playwright install chromium' manually to download necessary browsers.")
     return ""
 
 async def is_listing_real(listing_text: str) -> bool:
