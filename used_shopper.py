@@ -13,7 +13,7 @@ import requests
 from PIL import Image
 import nest_asyncio
 import faiss
-# Removed st.set_option("server.fileWatcherType", "none")
+# Removed st.set_option for file watcher; using environment variable instead.
 os.environ["STREAMLIT_WATCHER_DISABLED"] = "true"
 import torch
 from supabase import create_client, Client
@@ -21,23 +21,31 @@ from transformers import CLIPProcessor, CLIPModel
 from crawl4ai import AsyncWebCrawler, CrawlerRunConfig, CacheMode
 from openai import OpenAI
 
-# Enable nested event loops for async code to avoid errors
+# Enable nested event loops for async code
 nest_asyncio.apply()
 
 # st.set_page_config MUST be the very first Streamlit command.
 st.set_page_config(page_title="Local Listings Shopping Session", layout="wide")
 
-# --- Attempt to run the Playwright browser install script ---
+# --- Ensure Playwright browsers are installed ---
+try:
+  # Running this installs Chromium if not installed
+  subprocess.run(["npx", "playwright", "install", "chromium"], check=True)
+  st.info("Playwright browsers installed successfully (via npx playwright install chromium).")
+except Exception as e:
+  st.error(f"Failed to install Playwright browsers: {e}")
+
+# --- Attempt to run the install_browsers.sh script (if exists) ---
 if os.path.exists("install_browsers.sh"):
   try:
     subprocess.run(["bash", "install_browsers.sh"], check=True)
-    st.info("Playwright browsers installed successfully.")
+    st.info("install_browsers.sh executed successfully.")
   except subprocess.CalledProcessError as e:
-    st.warning(f"Playwright installation command failed: {e}")
+    st.warning(f"install_browsers.sh command failed: {e}")
   except Exception as e:
-    st.warning(f"Unexpected error during Playwright installation: {e}")
+    st.warning(f"Unexpected error running install_browsers.sh: {e}")
 else:
-  st.info("install_browsers.sh not found; skipping browser installation.")
+  st.info("install_browsers.sh not found; skipping.")
 
 # Initialize API Clients
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
