@@ -9,34 +9,23 @@ import nest_asyncio
 import faiss
 from urllib.parse import urlencode
 from supabase import create_client, Client
-
-# Import Crawl4AI classes including BrowserConfig and CrawlerRunConfig
-from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMode
-
-# Import torch and CLIP modules for image embeddings
+from crawl4ai import AsyncWebCrawler, CrawlerRunConfig, CacheMode
 import torch
 from transformers import CLIPProcessor, CLIPModel
+from openai import OpenAI  # New official API client class
 
-# Import the new OpenAI client
-from openai import OpenAI
-
-# === IMPORTANT ===
-# On Streamlit Cloud (or locally), ensure that Playwright browsers are installed.
-# You can do this by adding a post-install command: "playwright install"
-# or by running "playwright install" manually.
-
-# Enable nested event loops (required for async code in Streamlit)
+# Enable nested event loops for async code in Streamlit
 nest_asyncio.apply()
 
-# Initialize OpenAI client with the new API client method.
+# Initialize the new OpenAI client using your secret API key
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
-# Initialize Supabase client.
+# Initialize Supabase client
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_ANON_KEY = st.secrets["SUPABASE_ANON_KEY"]
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 
-# Configure the Streamlit page.
+# Configure the Streamlit page
 st.set_page_config(page_title="Local Listings Shopping Session", layout="wide")
 st.title("Local Listings Shopping Session")
 st.write("Find authentic listings from Facebook Marketplace or Craigslist in your area—and let AI guide your shopping session!")
@@ -46,13 +35,13 @@ source = st.selectbox("Select Source", options=["Facebook Marketplace", "Craigsl
 zip_code = st.text_input("Enter your Zip Code (5 digits):", value="60614")
 keyword = st.text_input("Optional: Enter a product keyword (e.g., 'bike', 'sofa'):")
 
-# Build a target URL based on the selected source.
+# Build a target URL based on the selected source
 def construct_target_url(source: str, zip_code: str, keyword: str) -> str:
     if source == "Craigslist":
         params = {"postal": zip_code}
         if keyword:
             params["query"] = keyword
-        # Example: using a generic Craigslist domain (adjust as needed)
+        # Example using a generic Craigslist domain (adjust as needed)
         return f"https://sfbay.craigslist.org/search/sss?{urlencode(params)}"
     elif source == "Facebook Marketplace":
         params = {"postal": zip_code}
@@ -65,26 +54,16 @@ def construct_target_url(source: str, zip_code: str, keyword: str) -> str:
 target_url = construct_target_url(source, zip_code, keyword)
 st.write("Target URL:", target_url)
 
-# --- Advanced Crawl4AI Setup ---
-# Define a BrowserConfig for global browser settings.
-browser_cfg = BrowserConfig(
-    browser_type="chromium",
-    headless=True,
-    verbose=True
-)
-
-# We'll use a CrawlerRunConfig for this crawl.
-crawl_config = CrawlerRunConfig(
-    cache_mode=CacheMode.BYPASS
-)
-
-# --- Asynchronous Functions for Scraping and Filtering Listings ---
+# -- Asynchronous Functions for Scraping and Filtering Listings --
 
 async def crawl_listings(url: str) -> str:
-    # Use AsyncWebCrawler with our BrowserConfig.
-    async with AsyncWebCrawler(config=browser_cfg) as crawler:
-        result = await crawler.arun(url=url, config=crawl_config)
-        # Assume the result returns a Markdown string in result.markdown_v2.fit_markdown.
+    run_config = CrawlerRunConfig(
+        cache_mode=CacheMode.BYPASS,
+        stream=True
+    )
+    async with AsyncWebCrawler() as crawler:
+        result = await crawler.arun(url=url, config=run_config)
+        # For demo purposes, assume the result is a Markdown string
         return result.markdown_v2.fit_markdown
 
 async def is_listing_real(listing_text: str) -> bool:
@@ -116,11 +95,12 @@ def extract_zip(text: str) -> str:
 
 async def process_url(url: str, desired_zip: str, keyword: str) -> list:
     page_text = await crawl_listings(url)
-    # Split the scraped text into candidate listings (assume listings separated by two newlines)
+    # Split text into candidate listings (assume listings are separated by two newlines)
     candidate_listings = [item.strip() for item in page_text.split("\n\n") if item.strip()]
     filtered_listings = []
     for listing in candidate_listings:
-        if extract_zip(listing) != desired_zip:
+        listing_zip = extract_zip(listing)
+        if listing_zip != desired_zip:
             continue
         if keyword and keyword.lower() not in listing.lower():
             continue
@@ -128,7 +108,7 @@ async def process_url(url: str, desired_zip: str, keyword: str) -> list:
             filtered_listings.append(listing)
     return filtered_listings
 
-# --- Functions for Computing Embeddings ---
+# -- Functions for Computing Embeddings --
 
 def get_text_embeddings(texts: list) -> np.ndarray:
     try:
@@ -142,7 +122,7 @@ def get_text_embeddings(texts: list) -> np.ndarray:
         st.error(f"Error computing text embeddings: {e}")
         return np.empty((0, 1536), dtype="float32")
 
-# Load CLIP model and processor for image embeddings.
+# Load CLIP model and processor for image embeddings
 clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
 clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 clip_model.eval()
@@ -160,31 +140,7 @@ def get_image_embedding(image_url: str) -> np.ndarray:
         st.error(f"Error processing image from {image_url}: {e}")
         return None
 
-# --- Supabase Integration: Store Listing Metadata ---
-# Note: The exec_sql RPC may not exist. In production, create the table manually via Supabase.
-def ensure_listings_table():
-    query = """
-    CREATE TABLE IF NOT EXISTS listings (
-      id SERIAL PRIMARY KEY,
-      source TEXT,
-      zip_code TEXT,
-      keyword TEXT,
-      listing_text TEXT,
-      image_url TEXT,
-      text_embedding JSONB,
-      image_embedding JSONB,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-    """
-    try:
-        # Attempt to run the query via an RPC.
-        # If the function doesn't exist, catch and warn.
-        supabase.rpc("exec_sql", {"sql": query}).execute()
-    except Exception as e:
-        st.warning("Could not run exec_sql; please ensure the 'listings' table exists manually in Supabase.")
-
-ensure_listings_table()
-
+# -- Supabase Integration: Store Listing Metadata --
 def store_listing_metadata(listing: dict):
     try:
         response = supabase.table("listings").insert(listing).execute()
@@ -193,7 +149,9 @@ def store_listing_metadata(listing: dict):
     except Exception as e:
         st.error(f"Error storing listing in Supabase: {e}")
 
-# --- Build FAISS Index ---
+# (Note: Ensure the 'listings' table exists manually in Supabase using the provided SQL)
+
+# -- Build FAISS Index --
 def build_faiss_index(embeddings: np.ndarray) -> faiss.IndexFlatL2:
     if embeddings.size == 0:
         return None
@@ -206,7 +164,7 @@ def search_faiss(index: faiss.IndexFlatL2, query_embedding: np.ndarray, k: int =
     distances, indices = index.search(query_embedding, k)
     return distances, indices
 
-# --- UI: Render a Listing Card ---
+# -- UI: Render a Listing Card --
 def render_listing_card(listing: dict):
     text = listing.get("listing_text", "")
     title = text[:60] + ("..." if len(text) > 60 else "")
@@ -226,7 +184,8 @@ def render_listing_card(listing: dict):
     """
     st.markdown(card_html, unsafe_allow_html=True)
 
-# --- Main Execution ---
+# -- Main Execution --
+
 if st.button("Search Listings"):
     if not target_url or not zip_code or len(zip_code) != 5 or not zip_code.isdigit():
         st.error("Please enter a valid target URL and a 5-digit zip code.")
@@ -236,7 +195,7 @@ if st.button("Search Listings"):
             real_listings = asyncio.run(process_url(target_url, zip_code, keyword))
             st.success(f"Found {len(real_listings)} authentic listings matching zip code {zip_code}!")
             
-            # Enrich listings with embeddings and optionally extract an image URL.
+            # For each listing, optionally extract an image URL if present.
             image_url_pattern = re.compile(r'(https?://\S+\.(jpg|jpeg|png))', re.IGNORECASE)
             enriched_listings = []
             for listing in real_listings:
@@ -251,10 +210,10 @@ if st.button("Search Listings"):
                     "listing_text": listing,
                     "image_url": image_url,
                 }
-                # Compute text embedding.
+                # Compute text embedding using the client
                 text_emb = get_text_embeddings([listing])
-                listing_data["text_embedding"] = text_emb.tolist()[0]
-                # Optionally compute image embedding.
+                listing_data["text_embedding"] = text_emb.tolist()[0]  # store as list
+                # Optionally, compute image embedding if image_url exists
                 if image_url:
                     img_emb = get_image_embedding(image_url)
                     listing_data["image_embedding"] = img_emb.tolist() if img_emb is not None else None
@@ -263,14 +222,14 @@ if st.button("Search Listings"):
                 enriched_listings.append(listing_data)
                 store_listing_metadata(listing_data)
             
-            # Build FAISS index for text embeddings for similarity search.
+            # Build FAISS index for text embeddings for in-session similarity search
             text_embeddings = np.array([np.array(d["text_embedding"], dtype="float32") for d in enriched_listings])
             text_index = build_faiss_index(text_embeddings)
             
             st.session_state["listings"] = enriched_listings
             st.session_state["text_faiss_index"] = text_index
 
-            # Display listings as cards in a grid layout.
+            # Display listings as cards in a grid layout
             num_columns = 3
             cols = st.columns(num_columns)
             for idx, listing in enumerate(enriched_listings):
@@ -279,7 +238,7 @@ if st.button("Search Listings"):
         except Exception as e:
             st.error(f"An error occurred during processing: {e}")
 
-# --- Shopping Session: Similarity Search Within Stored Listings ---
+# -- Shopping Session: Similarity Search Within Stored Listings --
 st.markdown("### Shopping Session: Find Similar Listings by Text")
 query_text = st.text_input("Enter text to search for similar listings within this session:")
 if query_text and "text_faiss_index" in st.session_state:
