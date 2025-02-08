@@ -15,18 +15,16 @@ from transformers import CLIPProcessor, CLIPModel
 from openai import OpenAI  # New official API client class
 import json
 import subprocess
-import os
 
 # Enable nested event loops for async code in Streamlit
 nest_asyncio.apply()
 
 # --- Ensure Playwright Browsers Are Installed ---
-# This command installs Chromium if it is not already present.
+# Try using npx to install chromium. If this fails, you must add a setup script.
 try:
-    # Run the command "playwright install chromium"
-    subprocess.run(["playwright", "install", "chromium"], check=True)
+    subprocess.run(["npx", "playwright", "install", "chromium"], check=True)
 except Exception as e:
-    st.error(f"Error installing browsers via Playwright: {e}")
+    st.error(f"Playwright browser installation error: {e}")
 
 # --- Initialize Clients ---
 # Initialize the OpenAI client using your secret API key.
@@ -68,7 +66,7 @@ def generate_search_parameters(description: str) -> dict:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "Output only valid JSON with the keys: query, min_price, and max_price."},
+                {"role": "system", "content": "Output only valid JSON with keys: query, min_price, max_price."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.3,
@@ -81,7 +79,7 @@ def generate_search_parameters(description: str) -> dict:
         st.error(f"Error generating search parameters: {e}")
         return {"query": description, "min_price": None, "max_price": None}
 
-# --- Functions to Build Target URL for Each Source ---
+# --- Build URL for Each Source ---
 def construct_target_url(source: str, zip_code: str, search_params: dict) -> str:
     if source == "Craigslist":
         params = {"postal": zip_code}
