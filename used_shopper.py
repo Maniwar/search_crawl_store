@@ -18,7 +18,9 @@ from openai import OpenAI  # New official API client class
 nest_asyncio.apply()
 
 # Initialize the new OpenAI client using your secret API key
-client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+client = OpenAI(
+    api_key=st.secrets['OPENAI_API_KEY']
+)
 
 # Initialize Supabase client
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
