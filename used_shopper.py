@@ -1,10 +1,13 @@
+# Set page config first!
+import streamlit as st
+st.set_page_config(page_title="Local Listings Shopping Session", layout="wide")
+
 import re
 import asyncio
 import numpy as np
 import requests
 from io import BytesIO
 from PIL import Image
-import streamlit as st
 import nest_asyncio
 import faiss
 from urllib.parse import urlencode
@@ -19,24 +22,21 @@ import subprocess
 # Enable nested event loops for async code in Streamlit
 nest_asyncio.apply()
 
-# --- Ensure Playwright Browsers Are Installed ---
-# Try using npx to install chromium. If this fails, you must add a setup script.
+# --- Attempt to install Playwright's Chromium (if possible) ---
 try:
+    # This may fail on Streamlit Cloud because "npx" is not available.
     subprocess.run(["npx", "playwright", "install", "chromium"], check=True)
+except FileNotFoundError as fnfe:
+    st.warning("npx not found; skipping Playwright browser installation. Ensure browsers are installed via your deployment configuration.")
 except Exception as e:
-    st.error(f"Playwright browser installation error: {e}")
+    st.warning(f"Playwright browser installation encountered an error: {e}")
 
 # --- Initialize Clients ---
-# Initialize the OpenAI client using your secret API key.
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
-
-# Initialize Supabase client.
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_ANON_KEY = st.secrets["SUPABASE_ANON_KEY"]
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 
-# Configure the Streamlit page.
-st.set_page_config(page_title="Local Listings Shopping Session", layout="wide")
 st.title("Local Listings Shopping Session")
 st.write("Find authentic listings from Facebook Marketplace and Craigslist in your area—and let AI guide your shopping session!")
 
@@ -296,5 +296,5 @@ def run_similarity_search():
                     if i < len(st.session_state["listings"]):
                         render_listing_card(st.session_state["listings"][i])
         asyncio.run(do_similarity())
-        
+
 run_similarity_search()
