@@ -1,4 +1,4 @@
-# app.py
+love you # app.py
 import os
 import subprocess
 import re
@@ -39,8 +39,15 @@ if os.path.exists("install_browsers.sh"):
 else:
   st.info("install_browsers.sh not found; skipping browser installation script.")
 
-# --- Function to check and install Playwright browsers ---
+# --- Function to check Node.js version and Playwright browsers ---
 def check_playwright_browsers():
+  node_version_str = subprocess.run(["node", "-v"], capture_output=True, text=True).stdout.strip()
+  node_major_version = int(node_version_str.split('.')[0].replace('v', ''))
+
+  if node_major_version < 14:
+    st.error(f"Your Node.js version is {node_version_str}. Playwright requires Node.js 14 or higher. Please update your Node.js version to use Playwright.")
+    return False
+
   try:
     subprocess.run(["which", "playwright"], check=True, capture_output=True)
     st.info("Playwright command found in PATH.")
@@ -60,7 +67,7 @@ def check_playwright_browsers():
     return False
 
 if not check_playwright_browsers():
-  st.stop() # Stop the app if browsers are not installed
+  st.stop() # Stop the app if browsers are not installed or Node.js version is too old
 
 # Initialize API Clients
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
@@ -379,3 +386,4 @@ def run_similarity_search():
 
 
 run_similarity_search()
+</boltArtifact>
