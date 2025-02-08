@@ -13,11 +13,12 @@ from crawl4ai import AsyncWebCrawler, CrawlerRunConfig, CacheMode
 import torch
 from transformers import CLIPProcessor, CLIPModel
 from openai import OpenAI  # New official API client class
+import json
 
 # Enable nested event loops for async code in Streamlit
 nest_asyncio.apply()
 
-# Initialize the new OpenAI client using your secret API key
+# Initialize the OpenAI client using your secret API key
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 # Initialize Supabase client
@@ -28,36 +29,78 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 # Configure the Streamlit page
 st.set_page_config(page_title="Local Listings Shopping Session", layout="wide")
 st.title("Local Listings Shopping Session")
-st.write("Find authentic listings from Facebook Marketplace and/or Craigslist in your area—and let AI guide your shopping session!")
+st.write("Find authentic listings from Facebook Marketplace and Craigslist in your area—and let AI guide your shopping session!")
 
 # -- User Inputs --
-# Use multiselect so you can pick one or both sources.
+# Instead of a simple keyword, ask for a full description.
 selected_sources = st.multiselect(
     "Select Sources", 
     options=["Facebook Marketplace", "Craigslist"],
     default=["Craigslist", "Facebook Marketplace"]
 )
 zip_code = st.text_input("Enter your Zip Code (5 digits):", value="60614")
-keyword = st.text_input("Optional: Enter a product keyword (e.g., 'bike', 'sofa'):")
+search_description = st.text_input("Describe what you're looking for (e.g. 'cool affordable sports car'):")
 
-# Function to get the target URL for a given source
-def construct_target_url(source: str, zip_code: str, keyword: str) -> str:
+# --- Helper: Generate Structured Search Parameters from a Free-Form Query ---
+def generate_search_parameters(description: str) -> dict:
+    """
+    Use an OpenAI chat completion to convert a free-form description into structured search parameters.
+    The prompt asks for a JSON object with keys such as "query", "min_price", and "max_price".
+    """
+    prompt = (
+        "You are an expert search assistant for car listings. "
+        "Convert the following user description into a JSON object containing search parameters "
+        "that can be used to build a URL for car searches. The JSON should have the following keys:\n"
+        "  - query: a refined query string to search for cars\n"
+        "  - min_price: a minimum price as a number (or null if not specified)\n"
+        "  - max_price: a maximum price as a number (or null if not specified)\n"
+        "For example, for the input 'cool affordable sports car', a possible output might be:\n"
+        '{"query": "sports car", "min_price": 5000, "max_price": 15000}\n\n'
+        f"User description: {description}\n\nOutput JSON:"
+    )
+    try:
+        # Use the client to generate structured parameters
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You output only valid JSON with the specified keys."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.3,
+            max_tokens=100
+        )
+        text = response.choices[0].message.content.strip()
+        # Attempt to parse the output as JSON
+        params = json.loads(text)
+        return params
+    except Exception as e:
+        st.error(f"Error generating search parameters: {e}")
+        # Fallback: use the raw description as the query with no price limits
+        return {"query": description, "min_price": None, "max_price": None}
+
+# --- Functions to Build Target URL for Each Source ---
+def construct_target_url(source: str, zip_code: str, search_params: dict) -> str:
     if source == "Craigslist":
+        # Craigslist supports parameters like query, min_price, max_price
         params = {"postal": zip_code}
-        if keyword:
-            params["query"] = keyword
-        # Example using a generic Craigslist domain (adjust as needed)
+        if search_params.get("query"):
+            params["query"] = search_params["query"]
+        if search_params.get("min_price") is not None:
+            params["min_price"] = str(search_params["min_price"])
+        if search_params.get("max_price") is not None:
+            params["max_price"] = str(search_params["max_price"])
         return f"https://sfbay.craigslist.org/search/sss?{urlencode(params)}"
     elif source == "Facebook Marketplace":
+        # Facebook Marketplace URLs are less documented.
+        # We'll pass postal and query parameters as an example.
         params = {"postal": zip_code}
-        if keyword:
-            params["query"] = keyword
+        if search_params.get("query"):
+            params["query"] = search_params["query"]
         return f"https://www.facebook.com/marketplace/learnmore?{urlencode(params)}"
     else:
         return ""
 
-# -- Asynchronous Functions for Scraping and Filtering Listings --
-
+# -- Asynchronous Functions for Crawling and Filtering Listings --
 async def crawl_listings(url: str) -> str:
     run_config = CrawlerRunConfig(
         cache_mode=CacheMode.BYPASS,
@@ -65,7 +108,7 @@ async def crawl_listings(url: str) -> str:
     )
     async with AsyncWebCrawler() as crawler:
         result = await crawler.arun(url=url, config=run_config)
-        # For demo purposes, we assume the result is a Markdown string
+        # For demo purposes, assume the result is a Markdown string
         return result.markdown_v2.fit_markdown
 
 async def is_listing_real(listing_text: str) -> bool:
@@ -95,8 +138,8 @@ def extract_zip(text: str) -> str:
     match = re.search(r"\b(\d{5})\b", text)
     return match.group(1) if match else ""
 
-async def process_source(source: str, zip_code: str, keyword: str) -> list:
-    url = construct_target_url(source, zip_code, keyword)
+async def process_source(source: str, zip_code: str, search_params: dict) -> list:
+    url = construct_target_url(source, zip_code, search_params)
     page_text = await crawl_listings(url)
     # Assume candidate listings are separated by two newlines
     candidate_listings = [item.strip() for item in page_text.split("\n\n") if item.strip()]
@@ -104,15 +147,13 @@ async def process_source(source: str, zip_code: str, keyword: str) -> list:
     for listing in candidate_listings:
         if extract_zip(listing) != zip_code:
             continue
-        if keyword and keyword.lower() not in listing.lower():
+        if search_params.get("query") and search_params["query"].lower() not in listing.lower():
             continue
         if await is_listing_real(listing):
-            # Tag the listing with its source
             filtered_listings.append((source, listing))
     return filtered_listings
 
 # -- Functions for Computing Embeddings --
-
 def get_text_embeddings(texts: list) -> np.ndarray:
     try:
         response = client.embeddings.create(
@@ -186,26 +227,29 @@ def render_listing_card(listing: dict):
     """
     st.markdown(card_html, unsafe_allow_html=True)
 
-# -- Main Execution --
+# --- Main Execution ---
 if st.button("Search Listings"):
     if not selected_sources or not zip_code or len(zip_code) != 5 or not zip_code.isdigit():
         st.error("Please select at least one source and enter a valid 5-digit zip code.")
     else:
-        st.info("Scraping and filtering listings. Please wait...")
+        st.info("Generating search parameters...")
+        search_params = generate_search_parameters(search_description) if search_description else {"query": "", "min_price": None, "max_price": None}
+        st.write("Search parameters:", search_params)
+        
+        st.info("Scraping and filtering listings from selected sources. Please wait...")
         try:
             # Run the crawl concurrently for all selected sources.
             results = await asyncio.gather(*[
-                process_source(source, zip_code, keyword) for source in selected_sources
+                process_source(source, zip_code, search_params) for source in selected_sources
             ])
             # Combine results from all sources
             combined_results = []
             for source_results in results:
-                for source, listing in source_results:
-                    combined_results.append((source, listing))
+                combined_results.extend(source_results)
             
             st.success(f"Found {len(combined_results)} authentic listings matching zip code {zip_code}!")
             
-            # For each listing, enrich with embeddings and optionally extract an image URL.
+            # Enrich each listing with embeddings and optionally extract an image URL.
             image_url_pattern = re.compile(r'(https?://\S+\.(jpg|jpeg|png))', re.IGNORECASE)
             enriched_listings = []
             for source, listing in combined_results:
@@ -216,7 +260,7 @@ if st.button("Search Listings"):
                 listing_data = {
                     "source": source,
                     "zip_code": zip_code,
-                    "keyword": keyword,
+                    "keyword": search_params.get("query", ""),
                     "listing_text": listing,
                     "image_url": image_url,
                 }
@@ -239,7 +283,7 @@ if st.button("Search Listings"):
             st.session_state["listings"] = enriched_listings
             st.session_state["text_faiss_index"] = text_index
 
-            # Display listings in a grid layout
+            # Display listings as cards in a grid layout
             num_columns = 3
             cols = st.columns(num_columns)
             for idx, listing in enumerate(enriched_listings):
@@ -248,7 +292,7 @@ if st.button("Search Listings"):
         except Exception as e:
             st.error(f"An error occurred during processing: {e}")
 
-# -- Shopping Session: Similarity Search Within Stored Listings --
+# --- Shopping Session: Similarity Search Within Stored Listings ---
 st.markdown("### Shopping Session: Find Similar Listings by Text")
 query_text = st.text_input("Enter text to search for similar listings within this session:")
 if query_text and "text_faiss_index" in st.session_state:
