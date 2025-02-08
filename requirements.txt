@@ -10,4 +10,3 @@ supabase
 transformers
 torch
 playwright
-npx
