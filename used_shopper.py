@@ -1,4 +1,3 @@
-love you # app.py
 import os
 import subprocess
 import re
