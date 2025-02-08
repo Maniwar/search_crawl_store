@@ -9,3 +9,4 @@ Pillow
 supabase
 transformers
 torch
+playwright
