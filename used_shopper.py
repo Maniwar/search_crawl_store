@@ -7,35 +7,57 @@ import json
 from io import BytesIO
 from urllib.parse import urlencode
 
+# Disable file watcher before importing torch or streamlit.
+os.environ["STREAMLIT_WATCHER_DISABLED"] = "true"
+
+# Import torch early to avoid __path__ errors.
+import torch
+
 import streamlit as st
 import numpy as np
 import requests
 from PIL import Image
 import nest_asyncio
 import faiss
-# Removed st.set_option for file watcher; using environment variable instead.
-os.environ["STREAMLIT_WATCHER_DISABLED"] = "true"
-import torch
 from supabase import create_client, Client
 from transformers import CLIPProcessor, CLIPModel
 from crawl4ai import AsyncWebCrawler, CrawlerRunConfig, CacheMode
 from openai import OpenAI
 
-# Enable nested event loops for async code
+# Enable nested event loops for async code.
 nest_asyncio.apply()
 
 # st.set_page_config MUST be the very first Streamlit command.
 st.set_page_config(page_title="Local Listings Shopping Session", layout="wide")
 
-# --- Ensure Playwright browsers are installed ---
-try:
-  # Running this installs Chromium if not installed
-  subprocess.run(["npx", "playwright", "install", "chromium"], check=True)
-  st.info("Playwright browsers installed successfully (via npx playwright install chromium).")
-except Exception as e:
-  st.error(f"Failed to install Playwright browsers: {e}")
+# --- One-time Playwright browser installation ---
+def install_playwright_browser():
+  home = os.getenv("HOME")
+  # Path where the Chromium executable should be installed.
+  browser_path = os.path.join(home, ".cache", "ms-playwright", "chromium-1155", "chrome-linux", "chrome")
+  if os.path.exists(browser_path):
+    st.info("Playwright browsers already installed.")
+    return
+  # Check Node.js version.
+  try:
+    node_version = subprocess.check_output(["node", "-v"], text=True).strip()
+    major_version = int(node_version.lstrip("v").split(".")[0])
+  except Exception as e:
+    st.error(f"Error checking Node.js version: {e}")
+    return
+  if major_version < 14:
+    st.error(f"Playwright requires Node.js 14 or higher. You are running Node.js {node_version}. Please update your Node.js version.")
+    return
+  try:
+    subprocess.run(["npx", "playwright", "install", "chromium"], check=True)
+    st.info("Playwright browsers installed successfully (via npx playwright install chromium).")
+  except Exception as e:
+    st.error(f"Failed to install Playwright browsers: {e}")
 
-# --- Attempt to run the install_browsers.sh script (if exists) ---
+# Run the browser installation (once per app run).
+install_playwright_browser()
+
+# Optionally run install_browsers.sh if available.
 if os.path.exists("install_browsers.sh"):
   try:
     subprocess.run(["bash", "install_browsers.sh"], check=True)
@@ -47,7 +69,7 @@ if os.path.exists("install_browsers.sh"):
 else:
   st.info("install_browsers.sh not found; skipping.")
 
-# Initialize API Clients
+# --- Initialize API Clients ---
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_ANON_KEY = st.secrets["SUPABASE_ANON_KEY"]
@@ -58,7 +80,7 @@ st.write("Find authentic listings from Facebook Marketplace and Craigslist in yo
 
 # --- User Inputs ---
 selected_sources = st.multiselect(
-  "Select Sources", 
+  "Select Sources",
   options=["Facebook Marketplace", "Craigslist"],
   default=["Craigslist", "Facebook Marketplace"]
 )
