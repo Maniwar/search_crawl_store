@@ -16,7 +16,7 @@ from supabase import create_client, Client
 nest_asyncio.apply()
 
 # Configure API keys from Streamlit secrets
-openai.api_key = st.secrets["OPENAI_API_KEY"]
+openai_api_key = st.secrets["OPENAI_API_KEY"]
 
 # Initialize Supabase client
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
