@@ -1,4 +1,3 @@
-<<<<<<< SEARCH
 import streamlit as st
 from playwright.async_api import async_playwright
 import asyncio
