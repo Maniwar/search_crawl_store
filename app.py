@@ -6,19 +6,22 @@ import json
 import requests
 import streamlit as st
 from datetime import datetime, timezone
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 from urllib.parse import urlparse
 from xml.etree import ElementTree
 from dotenv import load_dotenv
 from supabase import create_client, Client
 from openai import AsyncOpenAI
 
-# Imports for Crawl4AI and dispatchers
+# Imports for Crawl4AI, dispatchers, and advanced components
 from crawl4ai import (
     AsyncWebCrawler,
     BrowserConfig,
     CrawlerRunConfig,
     CacheMode,
+    RateLimiter,         # Advanced: for rate limiting
+    CrawlerMonitor,      # Advanced: for monitoring
+    DisplayMode          # Advanced: for monitor display mode
 )
 from crawl4ai.async_dispatcher import MemoryAdaptiveDispatcher
 
@@ -34,7 +37,7 @@ if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY or not OPENAI_API_KEY:
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
-# --- Begin Helper Functions ---
+# --- Helper Functions ---
 
 def chunk_text(t: str, c: int = 5000) -> List[str]:
     r = []
@@ -122,11 +125,14 @@ js_click_all = """
 })();
 """
 
+# Build a run configuration with advanced options for faster and stable extraction.
 def get_run_config(with_js: bool = False) -> CrawlerRunConfig:
     kwargs = {
         "cache_mode": CacheMode.BYPASS,
         "stream": False,
-        "exclude_external_links": False
+        "exclude_external_links": False,
+        "wait_for_images": True,
+        "delay_before_return_html": 1.0  # Wait for 1 second before extracting content
     }
     if with_js:
         kwargs["js_code"] = [js_click_all]
@@ -176,9 +182,7 @@ async def process_chunk(chunk: str, num: int, url: str) -> Dict[str, Any]:
 
 async def insert_chunk_to_supabase(d: Dict[str, Any]):
     try:
-        r = supabase.table("rag_chunks").upsert(d).execute()
-        if r.error:
-            print(r.error)
+        supabase.table("rag_chunks").upsert(d).execute()
     except Exception as e:
         print(f"Insert error: {e}")
 
@@ -189,20 +193,25 @@ async def process_and_store_document(url: str, md: str):
     insert_tasks = [insert_chunk_to_supabase(item) for item in processed_chunks]
     await asyncio.gather(*insert_tasks)
 
-# Recursive crawl function to follow all sitemap/internal links
-async def recursive_crawl(url: str, max_depth: int = 9, current_depth: int = 0, processed: set = None):
-    if processed is None:
-        processed = set()
-    if current_depth > max_depth or url in processed:
-        return
-    processed.add(url)
-    
+# Advanced Parallel Crawling using arun_many() with MemoryAdaptiveDispatcher.
+async def crawl_parallel(urls: List[str], max_concurrent: int = 10):
+    # Configure advanced dispatcher with RateLimiter and Monitor
     dispatcher = MemoryAdaptiveDispatcher(
-        memory_threshold_percent=85.0,
+        memory_threshold_percent=90.0,
         check_interval=1.0,
-        max_session_permit=5,
-        monitor=None
+        max_session_permit=max_concurrent,
+        rate_limiter=RateLimiter(
+            base_delay=(1.0, 2.0),
+            max_delay=30.0,
+            max_retries=2,
+            rate_limit_codes=[429, 503]
+        ),
+        monitor=CrawlerMonitor(
+            max_visible_rows=15,
+            display_mode=DisplayMode.DETAILED
+        )
     )
+    
     bc = BrowserConfig(
         headless=True,
         verbose=False,
@@ -211,22 +220,16 @@ async def recursive_crawl(url: str, max_depth: int = 9, current_depth: int = 0, 
     run_conf = get_run_config(with_js=True)
     
     async with AsyncWebCrawler(config=bc) as crawler:
-        result = await crawler.arun(url=url, config=run_conf)
-        if result.success:
-            print(f"Crawled: {url} (depth {current_depth})")
-            # Use the passed URL for storage.
-            await process_and_store_document(url, result.markdown_v2.raw_markdown)
-            # Get internal links from result.links dictionary.
-            links_dict = getattr(result, "links", {})
-            internal_links = links_dict.get("internal", [])
-            for link in internal_links:
-                href = link.get("href")
-                if href and same_domain(href, url) and href not in processed:
-                    await recursive_crawl(href, max_depth, current_depth + 1, processed)
-        else:
-            print(f"Error crawling {url}: {result.error_message}")
-
-# --- End Helper Functions ---
+        results = await crawler.arun_many(
+            urls=urls,
+            config=run_conf,
+            dispatcher=dispatcher
+        )
+        for r in results:
+            if r.success:
+                await process_and_store_document(r.url, r.markdown_v2.raw_markdown)
+            else:
+                print(f"Failed crawling {r.url}: {r.error_message}")
 
 def delete_all_chunks():
     supabase.table("rag_chunks").delete().neq("id", "").execute()
@@ -253,7 +256,7 @@ def get_db_stats():
         print(f"DB Stats error: {e}")
         return None
 
-# Main Streamlit app
+# --- Main Streamlit App ---
 async def main():
     st.set_page_config(page_title="Dynamic RAG Chat System (Supabase)", page_icon="🤖", layout="wide")
     if "messages" not in st.session_state:
@@ -315,12 +318,11 @@ async def main():
                     fu = format_sitemap_url(url_input)
                     found = get_urls_from_sitemap(fu)
                     if found:
-                        # Crawl every URL from the sitemap
-                        for link in found:
-                            await recursive_crawl(link, max_depth=9)
+                        # Crawl every URL from the sitemap concurrently using advanced dispatching.
+                        await crawl_parallel(found, max_concurrent=10)
                     else:
                         su = url_input.rstrip("/sitemap.xml")
-                        await recursive_crawl(su, max_depth=9)
+                        await crawl_parallel([su], max_concurrent=10)
                 st.session_state.urls_processed.add(url_input)
                 st.session_state.processing_complete = True
                 st.session_state.is_processing = False
