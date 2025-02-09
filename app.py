@@ -27,9 +27,9 @@ from crawl4ai import (
 )
 from crawl4ai.async_dispatcher import MemoryAdaptiveDispatcher
 
-# Imports for markdown generation and content filtering
+# Use LLMContentFilter for content filtering
 from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
-from crawl4ai.content_filter_strategy import PruningContentFilter
+from crawl4ai.content_filter_strategy import LLMContentFilter
 
 load_dotenv()
 
@@ -132,13 +132,19 @@ js_click_all = """
 """
 
 def get_run_config(with_js: bool = False) -> CrawlerRunConfig:
-    # Create a PruningContentFilter with higher threshold and minimum word count.
-    prune_filter = PruningContentFilter(
-        threshold=0.7,
-        threshold_type="dynamic",
-        min_word_threshold=20
+    # Use LLMContentFilter to extract the main, relevant content.
+    llm_filter = LLMContentFilter(
+        provider="openai/gpt-4o",
+        api_token=os.getenv("OPENAI_API_KEY"),
+        chunk_token_threshold=4096,
+        instruction="""
+        Extract the main content of this page.
+        Remove navigation menus, ads, sidebars, footers, cookie notices, and other non-essential UI elements.
+        Return the result as clean markdown with proper headers and code blocks.
+        """,
+        verbose=True
     )
-    md_generator = DefaultMarkdownGenerator(content_filter=prune_filter)
+    md_generator = DefaultMarkdownGenerator(content_filter=llm_filter)
     kwargs = {
         "cache_mode": CacheMode.BYPASS,
         "stream": False,
@@ -261,7 +267,7 @@ async def recursive_crawl(url: str, max_depth: int = 9, current_depth: int = 0, 
     st.session_state.processing_urls.append(url)
     update_progress()
     
-    await asyncio.sleep(1)
+    await asyncio.sleep(1)  # delay to allow page navigation to settle
     
     dispatcher = MemoryAdaptiveDispatcher(
         memory_threshold_percent=85.0,
@@ -365,6 +371,9 @@ async def main():
     # UI widget for concurrency.
     max_concurrent = st.slider("Max concurrent URLs", min_value=1, max_value=50, value=10)
     
+    # Checkbox to decide whether to follow internal links recursively
+    follow_links_recursively = st.checkbox("Follow links recursively", value=True)
+    
     ic, cc = st.columns([1, 2])
     with ic:
         st.subheader("Add Content to RAG System")
@@ -391,11 +400,20 @@ async def main():
                 with st.spinner("Crawling & Processing..."):
                     fu = format_sitemap_url(url_input)
                     found = get_urls_from_sitemap(fu)
-                    if found:
-                        await crawl_parallel(found, max_concurrent=max_concurrent)
+                    if follow_links_recursively:
+                        # If recursive mode is on, use the recursive crawl starting from the first URL.
+                        if found:
+                            await recursive_crawl(found[0], max_depth=9)
+                        else:
+                            su = url_input.rstrip("/sitemap.xml")
+                            await recursive_crawl(su, max_depth=9)
                     else:
-                        su = url_input.rstrip("/sitemap.xml")
-                        await crawl_parallel([su], max_concurrent=max_concurrent)
+                        # Otherwise, just crawl the URLs in parallel.
+                        if found:
+                            await crawl_parallel(found, max_concurrent=max_concurrent)
+                        else:
+                            su = url_input.rstrip("/sitemap.xml")
+                            await crawl_parallel([su], max_concurrent=max_concurrent)
                 st.session_state.urls_processed.add(url_input)
                 st.session_state.processing_complete = True
                 st.session_state.is_processing = False
