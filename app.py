@@ -55,9 +55,9 @@ js_click_all = """
 
 # --- Helper Functions ---
 
-def chunk_text(t: str, max_chars: int = 5000) -> List[str]:
-    """Splits text into chunks by paragraphs for efficiency."""
-    paragraphs = t.split("\n\n")
+def chunk_text(text: str, max_chars: int = 5000) -> List[str]:
+    """Splits text into chunks by paragraphs (fast and efficient)."""
+    paragraphs = text.split("\n\n")
     chunks = []
     current_chunk = ""
     for para in paragraphs:
@@ -82,24 +82,39 @@ async def get_embedding(text: str) -> List[float]:
         print(f"Embedding error: {e}")
         return [0.0] * 1536
 
-def highlight_query(text: str, query: str) -> str:
-    """Highlights query terms in the text using HTML <mark> tags."""
-    terms = query.split()
-    for term in terms:
-        text = re.sub(f"({re.escape(term)})", r"<mark>\1</mark>", text, flags=re.IGNORECASE)
-    return text
+def extract_relevant_snippet(content: str, query: str) -> str:
+    """
+    Splits the content into paragraphs, scores each by the count
+    of query-term occurrences (case-insensitive), selects the best match,
+    and highlights the query terms using <mark> tags.
+    """
+    paragraphs = content.split("\n\n")
+    best_score = 0
+    best_para = paragraphs[0] if paragraphs else content
+    query_terms = query.split()
+    for para in paragraphs:
+        score = sum(len(re.findall(re.escape(term), para, flags=re.IGNORECASE)) for term in query_terms)
+        if score > best_score:
+            best_score = score
+            best_para = para
+    # Highlight terms
+    for term in query_terms:
+        best_para = re.sub(f"({re.escape(term)})", r"<mark>\1</mark>", best_para, flags=re.IGNORECASE)
+    return best_para
 
 def retrieve_relevant_documentation(query: str) -> str:
-    """Retrieves the best-matching document and highlights query terms."""
+    """
+    Retrieves the best-matching document from Supabase
+    and returns a snippet (the best paragraph with highlighted query terms)
+    along with its title and source.
+    """
     e = asyncio.run(get_embedding(query))
     r = supabase.rpc("match_documents", {"query_embedding": e, "match_count": 5}).execute()
     d = r.data
     if not d:
         return "No relevant documentation found."
-    # Select the document with the highest similarity score.
     best = max(d, key=lambda x: x.get("similarity", 0))
-    # Highlight query terms in the full content.
-    snippet = highlight_query(best["content"], query)
+    snippet = extract_relevant_snippet(best["content"], query)
     return f"\n# {best['title']}\n\n{snippet}\n...\nSource: {best['url']}\nSimilarity: {best['similarity']:.3f}\n"
 
 def get_urls_from_sitemap(u: str) -> List[str]:
@@ -125,7 +140,7 @@ def format_sitemap_url(u: str) -> str:
     return u
 
 def get_run_config(with_js: bool = False) -> CrawlerRunConfig:
-    # Use default conversion to get full raw markdown.
+    # We want the full raw markdown conversion.
     kwargs = {
         "cache_mode": CacheMode.BYPASS,
         "stream": False,
