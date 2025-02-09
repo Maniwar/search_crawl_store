@@ -1,6 +1,0 @@
-streamlit
-crawl4ai
-supabase
-requests
-openai
-json
