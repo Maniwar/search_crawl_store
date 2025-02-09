@@ -3,8 +3,7 @@ import os
 # Install Playwright browsers and dependencies at runtime.
 os.system('playwright install')
 os.system('playwright install-deps')
-
-
+ 
 import streamlit as st
 import asyncio
 import json
@@ -15,10 +14,21 @@ from pydantic import BaseModel
 # --------------------------------------------------
 # SECRETS & CONFIGURATION
 # --------------------------------------------------
-# See the instructions above for setting up .streamlit/secrets.toml
+# In your .streamlit/secrets.toml, add:
+#
+# [supabase]
+# url = "https://your-supabase-url.supabase.co"
+# key = "your_supabase_key_here"
+#
+# [crawl4ai]
+# openai_api_key = "your_openai_api_key_here"  # Required for the agent functionality
+
 SUPABASE_URL = st.secrets["supabase"]["url"]
 SUPABASE_KEY = st.secrets["supabase"]["key"]
-OPENAI_API_KEY = st.secrets["crawl4ai"]["openai_api_key"]
+OPENAI_API_KEY = st.secrets["crawl4ai"].get("openai_api_key")
+
+if not OPENAI_API_KEY:
+    st.error("OPENAI_API_KEY is not defined in your secrets! Please add it under [crawl4ai].")
 
 # --------------------------------------------------
 # Supabase Client Initialization
@@ -33,7 +43,7 @@ from crawl4ai import AsyncWebCrawler, CrawlerRunConfig, CacheMode, BrowserConfig
 from crawl4ai.extraction_strategy import JsonCssExtractionStrategy
 
 # --------------------------------------------------
-# OpenAI Initialization for Agent
+# OpenAI Client Initialization for Agent
 # --------------------------------------------------
 import openai
 openai.api_key = OPENAI_API_KEY
