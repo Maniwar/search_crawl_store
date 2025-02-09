@@ -577,20 +577,23 @@ async def main():
                     st.markdown(user_query)
 
                 # run agent with streaming
-                async with pydantic_ai_agent.run_stream(
-                    user_query,
-                    deps=MyPydanticAIDeps(
-                        supabase=supabase,
-                        openai_client=openai_client,
-                    ),
-                    message_history=st.session_state.messages[:-1],
-                ) as result:
-                    partial_text = ""
-                    msg_placeholder = st.empty()
-                    async for chunk in result.stream_text(delta=True):
-                        partial_text += chunk
-                        msg_placeholder.markdown(partial_text)
-                    st.session_state.messages.extend(result.new_messages())
+                try:
+                    async with pydantic_ai_agent.run_stream(
+                        user_query,
+                        deps=MyPydanticAIDeps(
+                            supabase=supabase,
+                            openai_client=openai_client,
+                        ),
+                        message_history=st.session_state.messages[:-1],
+                    ) as result:
+                        partial_text = ""
+                        msg_placeholder = st.empty()
+                        async for chunk in result.stream_text(delta=True):
+                            partial_text += chunk
+                            msg_placeholder.markdown(partial_text)
+                        st.session_state.messages.extend(result.new_messages())
+                except Exception as e:
+                    st.error(f"Error during streaming: {e}")
 
             if st.button("Clear Chat History", type="secondary"):
                 st.session_state.messages = []
