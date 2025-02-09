@@ -142,7 +142,7 @@ def get_run_config(with_js: bool = False) -> CrawlerRunConfig:
 def extract_title_and_summary_from_markdown(md: str) -> Dict[str, str]:
     """
     Extracts a title and summary from markdown.
-    Uses the first header line (starting with '#') as title,
+    Uses the first header line (starting with '#') as the title,
     and the entire markdown as the summary.
     """
     lines = md.splitlines()
@@ -195,9 +195,8 @@ def update_progress():
     if progress_placeholder is not None:
         progress_placeholder.markdown("### Currently Processing URLs:\n" +
                                       "\n".join(f"- {url}" for url in st.session_state.processing_urls))
-# --- End UI Progress Widget ---
 
-# Advanced Parallel Crawling using arun_many() with MemoryAdaptiveDispatcher.
+# --- Advanced Parallel Crawling ---
 async def crawl_parallel(urls: List[str], max_concurrent: int = 10):
     dispatcher = MemoryAdaptiveDispatcher(
         memory_threshold_percent=90.0,
@@ -229,11 +228,15 @@ async def crawl_parallel(urls: List[str], max_concurrent: int = 10):
         )
         for r in results:
             if r.success:
-                await process_and_store_document(r.url, r.markdown_v2.raw_markdown)
+                # Use fit_markdown if available; otherwise, fall back to raw markdown.
+                md = getattr(r, "fit_markdown", None)
+                if not md:
+                    md = r.markdown_v2.raw_markdown
+                await process_and_store_document(r.url, md)
             else:
                 print(f"Failed crawling {r.url}: {r.error_message}")
 
-# Recursive crawl function to follow all sitemap/internal links.
+# Recursive crawl function to follow internal links.
 async def recursive_crawl(url: str, max_depth: int = 9, current_depth: int = 0, processed: set = None):
     if processed is None:
         processed = set()
@@ -244,8 +247,7 @@ async def recursive_crawl(url: str, max_depth: int = 9, current_depth: int = 0, 
     st.session_state.processing_urls.append(url)
     update_progress()
     
-    # Add a short delay to mitigate Playwright navigation errors.
-    await asyncio.sleep(1)
+    await asyncio.sleep(1)  # delay to allow page navigation to settle
     
     dispatcher = MemoryAdaptiveDispatcher(
         memory_threshold_percent=85.0,
@@ -264,7 +266,11 @@ async def recursive_crawl(url: str, max_depth: int = 9, current_depth: int = 0, 
         result = await crawler.arun(url=url, config=run_conf)
         if result.success:
             print(f"Crawled: {url} (depth {current_depth})")
-            await process_and_store_document(url, result.markdown_v2.raw_markdown)
+            # Use fit_markdown if available.
+            md = getattr(result, "fit_markdown", None)
+            if not md:
+                md = result.markdown_v2.raw_markdown
+            await process_and_store_document(url, md)
             links_dict = getattr(result, "links", {})
             internal_links = links_dict.get("internal", [])
             for link in internal_links:
