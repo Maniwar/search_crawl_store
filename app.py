@@ -260,7 +260,7 @@ async def main():
                 st.session_state.messages=[]
                 st.session_state.suggested_questions=None
                 st.success("Database cleared successfully!")
-                st.experimental_rerun()
+                st.rerun()
         if pb and url_input:
             if url_input not in st.session_state.urls_processed:
                 st.session_state.is_processing=True
@@ -275,7 +275,7 @@ async def main():
                 st.session_state.urls_processed.add(url_input)
                 st.session_state.processing_complete=True
                 st.session_state.is_processing=False
-                st.experimental_rerun()
+                st.rerun()
             else:
                 st.warning("This URL has already been processed!")
         if st.session_state.urls_processed:
@@ -322,7 +322,7 @@ async def main():
                         st.markdown(f"Error: {e}")
             if st.button("Clear Chat History",type="secondary"):
                 st.session_state.messages=[]
-                st.experimental_rerun()
+                st.rerun()
         else:
             st.info("Please process a URL first to start chatting!")
     st.markdown("---")
