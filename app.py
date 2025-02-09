@@ -22,7 +22,6 @@ from crawl4ai import (
     CacheMode,
 )
 from crawl4ai.async_dispatcher import MemoryAdaptiveDispatcher, SemaphoreDispatcher
-from crawl4ai.rate_limiter import RateLimiter
 
 load_dotenv()
 
@@ -179,8 +178,7 @@ async def crawl_parallel(urls: List[str], mc: int = 5):
         memory_threshold_percent=85.0,  # pause if memory usage > 85%
         check_interval=1.0,
         max_session_permit=mc,
-        rate_limiter=RateLimiter(
-            base_delay=(1.0, 2.0),
+        # rate_limiter=None
             max_delay=30.0,
             max_retries=2,
             rate_limit_codes=[429, 503]
