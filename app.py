@@ -10,7 +10,7 @@ import re
 import streamlit as st
 from datetime import datetime, timezone
 from typing import List, Dict, Any
-from urllib.parse import urlparse, urljoin
+from urllib.parse import urlparse, urljoin, urlunparse
 from xml.etree import ElementTree
 from dotenv import load_dotenv
 from supabase import create_client, Client
@@ -55,8 +55,17 @@ js_click_all = """
 
 # --- Helper Functions ---
 
+def normalize_url(u: str) -> str:
+    """
+    Normalize a URL by lowercasing the scheme and netloc,
+    and stripping any trailing slash (except for the root path).
+    """
+    parts = urlparse(u)
+    normalized_path = parts.path.rstrip('/') if parts.path != '/' else parts.path
+    normalized = parts._replace(scheme=parts.scheme.lower(), netloc=parts.netloc.lower(), path=normalized_path)
+    return urlunparse(normalized)
+
 def chunk_text(t: str, max_chars: int = 5000) -> List[str]:
-    """Splits text into chunks by paragraphs for efficiency."""
     paragraphs = t.split("\n\n")
     chunks = []
     current_chunk = ""
@@ -83,10 +92,6 @@ async def get_embedding(text: str) -> List[float]:
         return [0.0] * 1536
 
 def extract_reference_snippet(content: str, query: str, snippet_length: int = 300) -> str:
-    """
-    Finds the first occurrence of any query term in the content and returns a substring
-    around that point with the query terms highlighted using inline CSS.
-    """
     query_terms = query.split()
     first_index = None
     for term in query_terms:
@@ -99,7 +104,6 @@ def extract_reference_snippet(content: str, query: str, snippet_length: int = 30
         snippet = content[start:start + snippet_length]
     else:
         snippet = content[:snippet_length]
-    # Highlight query terms (skip words starting with "http")
     def highlight_word(word):
         if word.lower().startswith("http"):
             return word
@@ -111,7 +115,6 @@ def extract_reference_snippet(content: str, query: str, snippet_length: int = 30
     return highlighted
 
 def retrieve_relevant_documentation(query: str) -> str:
-    """Retrieves the best-matching document from Supabase and returns a reference block with a highlighted snippet."""
     e = asyncio.run(get_embedding(query))
     r = supabase.rpc("match_documents", {"query_embedding": e, "match_count": 5}).execute()
     d = r.data
@@ -136,11 +139,6 @@ def same_domain(url1: str, url2: str) -> bool:
     return urlparse(url1).netloc == urlparse(url2).netloc
 
 def format_sitemap_url(u: str) -> str:
-    """
-    If the URL already contains 'sitemap.xml', returns it unchanged;
-    if it's a domain-level URL, appends '/sitemap.xml';
-    otherwise, returns the URL as-is.
-    """
     if "sitemap.xml" in u:
         return u
     parsed = urlparse(u)
@@ -149,7 +147,6 @@ def format_sitemap_url(u: str) -> str:
     return u
 
 def get_run_config(with_js: bool = False) -> CrawlerRunConfig:
-    # We want the full raw markdown (no LLM filtering).
     kwargs = {
         "cache_mode": CacheMode.BYPASS,
         "stream": False,
@@ -211,20 +208,22 @@ def init_progress_state():
         st.session_state.processing_urls = []
 
 def add_processing_url(url: str):
-    if url not in st.session_state.processing_urls:
-        st.session_state.processing_urls.append(url)
+    norm_url = normalize_url(url)
+    if norm_url not in st.session_state.processing_urls:
+        st.session_state.processing_urls.append(norm_url)
     update_progress()
 
 def remove_processing_url(url: str):
-    if url in st.session_state.processing_urls:
-        st.session_state.processing_urls.remove(url)
+    norm_url = normalize_url(url)
+    if norm_url in st.session_state.processing_urls:
+        st.session_state.processing_urls.remove(norm_url)
     update_progress()
 
 def update_progress():
-    # Deduplicate and display the currently processing URLs in the sidebar.
     unique_urls = list(dict.fromkeys(st.session_state.get("processing_urls", [])))
-    st.sidebar.markdown("### Currently Processing URLs:\n" +
-                        "\n".join(f"- {url}" for url in unique_urls))
+    # Always clear previous sidebar content before updating
+    st.sidebar.empty().markdown("### Currently Processing URLs:\n" +
+        "\n".join(f"- {url}" for url in unique_urls))
 
 # --- Advanced Parallel Crawling ---
 async def crawl_parallel(urls: List[str], max_concurrent: int = 10):
@@ -272,40 +271,43 @@ async def recursive_crawl(url: str, max_depth: int = 9, current_depth: int = 0,
     if current_depth > max_depth or url in processed:
         return
     processed.add(url)
-    add_processing_url(url)
-    await asyncio.sleep(1)
-    async with sema:
-        dispatcher = MemoryAdaptiveDispatcher(
-            memory_threshold_percent=85.0,
-            check_interval=1.0,
-            max_session_permit=5,
-            monitor=None
-        )
-        bc = BrowserConfig(
-            headless=True,
-            verbose=False,
-            extra_args=["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox"]
-        )
-        run_conf = get_run_config(with_js=False)
-        async with AsyncWebCrawler(config=bc) as crawler:
-            result = await crawler.arun(url=url, config=run_conf)
-            if result.success:
-                print(f"Crawled: {url} (depth {current_depth})")
-                md = result.markdown_v2.raw_markdown
-                await process_and_store_document(url, md)
-                links_dict = getattr(result, "links", {})
-                internal_links = links_dict.get("internal", [])
-                tasks = []
-                for link in internal_links:
-                    href = link.get("href")
-                    absolute_url = urljoin(url, href) if href else None
-                    if absolute_url and same_domain(absolute_url, url) and absolute_url not in processed:
-                        tasks.append(recursive_crawl(absolute_url, max_depth, current_depth + 1, processed, sema))
-                if tasks:
-                    await asyncio.gather(*tasks)
-            else:
-                print(f"Error crawling {url}: {result.error_message}")
-    remove_processing_url(url)
+    norm_url = normalize_url(url)
+    add_processing_url(norm_url)
+    try:
+        await asyncio.sleep(1)
+        async with sema:
+            dispatcher = MemoryAdaptiveDispatcher(
+                memory_threshold_percent=85.0,
+                check_interval=1.0,
+                max_session_permit=5,
+                monitor=None
+            )
+            bc = BrowserConfig(
+                headless=True,
+                verbose=False,
+                extra_args=["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox"]
+            )
+            run_conf = get_run_config(with_js=False)
+            async with AsyncWebCrawler(config=bc) as crawler:
+                result = await crawler.arun(url=url, config=run_conf)
+                if result.success:
+                    print(f"Crawled: {url} (depth {current_depth})")
+                    md = result.markdown_v2.raw_markdown
+                    await process_and_store_document(url, md)
+                    links_dict = getattr(result, "links", {})
+                    internal_links = links_dict.get("internal", [])
+                    tasks = []
+                    for link in internal_links:
+                        href = link.get("href")
+                        absolute_url = urljoin(url, href) if href else None
+                        if absolute_url and same_domain(absolute_url, url) and absolute_url not in processed:
+                            tasks.append(recursive_crawl(absolute_url, max_depth, current_depth + 1, processed, sema))
+                    if tasks:
+                        await asyncio.gather(*tasks)
+                else:
+                    print(f"Error crawling {url}: {result.error_message}")
+    finally:
+        remove_processing_url(norm_url)
 
 def delete_all_chunks():
     supabase.table("rag_chunks").delete().neq("id", "").execute()
@@ -346,7 +348,7 @@ async def main():
     if "suggested_questions" not in st.session_state:
         st.session_state.suggested_questions = None
     if "processing_urls" not in st.session_state:
-        st.session_state.processing_urls = []
+        init_progress_state()
     
     st.session_state.progress_placeholder = st.sidebar.empty()
     update_progress()
@@ -381,7 +383,6 @@ async def main():
         st.write("Enter a website URL to process.")
         url_input = st.text_input("Website URL", key="url_input", placeholder="example.com or https://example.com")
         if url_input:
-            # If the URL already contains 'sitemap.xml', use it; otherwise, generate for domain-level URLs.
             if "sitemap.xml" in url_input:
                 pv = url_input
             else:
@@ -407,7 +408,6 @@ async def main():
             if url_input not in st.session_state.urls_processed:
                 st.session_state.is_processing = True
                 with st.spinner("Crawling & Processing..."):
-                    # Try to get sitemap URLs; if not found, use the URL as-is.
                     if "sitemap.xml" in url_input:
                         found = get_urls_from_sitemap(url_input)
                     else:
@@ -415,7 +415,7 @@ async def main():
                         found = get_urls_from_sitemap(fu)
                         if not found:
                             found = [url_input]
-                    sema = asyncio.Semaphore(max_concurrent)  # Global concurrency limit
+                    sema = asyncio.Semaphore(max_concurrent)
                     if follow_links_recursively:
                         await recursive_crawl(found[0], max_depth=9, sema=sema)
                     else:
