@@ -1,3 +1,10 @@
+import subprocess
+
+try:
+    subprocess.run(["python", "-m", "playwright", "install"], check=True)
+except Exception as e:
+    print(f"Playwright installation failed: {e}")
+
 import streamlit as st
 import asyncio
 import json
