@@ -85,7 +85,7 @@ async def get_embedding(text: str) -> List[float]:
 def extract_reference_snippet(content: str, query: str, snippet_length: int = 300) -> str:
     """
     Finds the first occurrence of any query term in the content and returns a substring
-    around that point. The query terms are highlighted using inline CSS.
+    around that point with the query terms highlighted. Words starting with "http" are not modified.
     """
     query_terms = query.split()
     first_index = None
@@ -99,12 +99,21 @@ def extract_reference_snippet(content: str, query: str, snippet_length: int = 30
         snippet = content[start:start + snippet_length]
     else:
         snippet = content[:snippet_length]
-    for term in query_terms:
-        snippet = re.sub(f"({re.escape(term)})", r'<span style="background-color: yellow;">\1</span>', snippet, flags=re.IGNORECASE)
-    return snippet
+    # Highlight words if they are not URLs.
+    def highlight_word(word):
+        if word.lower().startswith("http"):
+            return word
+        for term in query_terms:
+            if re.search(re.escape(term), word, flags=re.IGNORECASE):
+                return f'<span style="background-color: yellow;">{word}</span>'
+        return word
+
+    words = snippet.split()
+    highlighted_words = [highlight_word(word) for word in words]
+    return " ".join(highlighted_words)
 
 def retrieve_relevant_documentation(query: str) -> str:
-    """Retrieves the best-matching document from Supabase and returns a reference snippet."""
+    """Retrieves the best-matching document from Supabase and returns a reference block with a highlighted snippet."""
     e = asyncio.run(get_embedding(query))
     r = supabase.rpc("match_documents", {"query_embedding": e, "match_count": 5}).execute()
     d = r.data
@@ -131,7 +140,8 @@ def same_domain(url1: str, url2: str) -> bool:
 def format_sitemap_url(u: str) -> str:
     """
     If the URL already contains 'sitemap.xml', returns it unchanged;
-    otherwise, if it's a domain-level URL, appends '/sitemap.xml'. For page URLs, returns as-is.
+    if it's a domain-level URL, appends '/sitemap.xml';
+    otherwise, returns the URL as-is.
     """
     if "sitemap.xml" in u:
         return u
@@ -141,7 +151,7 @@ def format_sitemap_url(u: str) -> str:
     return u
 
 def get_run_config(with_js: bool = False) -> CrawlerRunConfig:
-    # We no longer use LLM filtering. We want the full raw markdown.
+    # We want the full raw markdown (no LLM filtering)
     kwargs = {
         "cache_mode": CacheMode.BYPASS,
         "stream": False,
@@ -202,7 +212,7 @@ def init_progress_state():
         st.session_state.processing_urls = []
 
 def update_progress():
-    # Deduplicate the processing URLs and show in sidebar.
+    # Deduplicate the processing URLs before displaying in the sidebar.
     unique_urls = list(dict.fromkeys(st.session_state.processing_urls))
     st.sidebar.markdown("### Currently Processing URLs:\n" +
                         "\n".join(f"- {url}" for url in unique_urls))
@@ -243,10 +253,13 @@ async def crawl_parallel(urls: List[str], max_concurrent: int = 10):
             else:
                 print(f"Failed crawling {r.url}: {r.error_message}")
 
-# --- Recursive Crawl with Concurrency Limit ---
-async def recursive_crawl(url: str, max_depth: int = 9, current_depth: int = 0, processed: set = None):
+# --- Recursive Crawl with Global Concurrency Limit ---
+async def recursive_crawl(url: str, max_depth: int = 9, current_depth: int = 0, 
+                          processed: set = None, sema: asyncio.Semaphore = None):
     if processed is None:
         processed = set()
+    if sema is None:
+        sema = asyncio.Semaphore(10)  # Global concurrency limit of 10
     if current_depth > max_depth or url in processed:
         return
     processed.add(url)
@@ -254,37 +267,37 @@ async def recursive_crawl(url: str, max_depth: int = 9, current_depth: int = 0, 
         st.session_state.processing_urls.append(url)
     update_progress()
     await asyncio.sleep(1)
-    dispatcher = MemoryAdaptiveDispatcher(
-        memory_threshold_percent=85.0,
-        check_interval=1.0,
-        max_session_permit=5,
-        monitor=None
-    )
-    bc = BrowserConfig(
-        headless=True,
-        verbose=False,
-        extra_args=["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox"]
-    )
-    run_conf = get_run_config(with_js=False)
-    async with AsyncWebCrawler(config=bc) as crawler:
-        result = await crawler.arun(url=url, config=run_conf)
-        if result.success:
-            print(f"Crawled: {url} (depth {current_depth})")
-            md = result.markdown_v2.raw_markdown
-            await process_and_store_document(url, md)
-            links_dict = getattr(result, "links", {})
-            internal_links = links_dict.get("internal", [])
-            tasks = []
-            for link in internal_links:
-                href = link.get("href")
-                absolute_url = urljoin(url, href) if href else None
-                if absolute_url and same_domain(absolute_url, url) and absolute_url not in processed:
-                    tasks.append(recursive_crawl(absolute_url, max_depth, current_depth + 1, processed))
-            if tasks:
-                # Process up to 10 tasks concurrently overall.
-                await asyncio.gather(*tasks)
-        else:
-            print(f"Error crawling {url}: {result.error_message}")
+    async with sema:
+        dispatcher = MemoryAdaptiveDispatcher(
+            memory_threshold_percent=85.0,
+            check_interval=1.0,
+            max_session_permit=5,
+            monitor=None
+        )
+        bc = BrowserConfig(
+            headless=True,
+            verbose=False,
+            extra_args=["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox"]
+        )
+        run_conf = get_run_config(with_js=False)
+        async with AsyncWebCrawler(config=bc) as crawler:
+            result = await crawler.arun(url=url, config=run_conf)
+            if result.success:
+                print(f"Crawled: {url} (depth {current_depth})")
+                md = result.markdown_v2.raw_markdown
+                await process_and_store_document(url, md)
+                links_dict = getattr(result, "links", {})
+                internal_links = links_dict.get("internal", [])
+                tasks = []
+                for link in internal_links:
+                    href = link.get("href")
+                    absolute_url = urljoin(url, href) if href else None
+                    if absolute_url and same_domain(absolute_url, url) and absolute_url not in processed:
+                        tasks.append(recursive_crawl(absolute_url, max_depth, current_depth + 1, processed, sema))
+                if tasks:
+                    await asyncio.gather(*tasks)
+            else:
+                print(f"Error crawling {url}: {result.error_message}")
     if url in st.session_state.processing_urls:
         st.session_state.processing_urls.remove(url)
     update_progress()
@@ -389,6 +402,7 @@ async def main():
             if url_input not in st.session_state.urls_processed:
                 st.session_state.is_processing = True
                 with st.spinner("Crawling & Processing..."):
+                    # Try to get sitemap URLs; if not found, use the URL as-is.
                     if "sitemap.xml" in url_input:
                         found = get_urls_from_sitemap(url_input)
                     else:
@@ -396,8 +410,10 @@ async def main():
                         found = get_urls_from_sitemap(fu)
                         if not found:
                             found = [url_input]
+                    # Use a global semaphore for recursive crawling.
+                    sema = asyncio.Semaphore(max_concurrent)
                     if follow_links_recursively:
-                        await recursive_crawl(found[0], max_depth=9)
+                        await recursive_crawl(found[0], max_depth=9, sema=sema)
                     else:
                         await crawl_parallel(found, max_concurrent=max_concurrent)
                 st.session_state.urls_processed.add(url_input)
