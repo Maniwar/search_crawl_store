@@ -34,6 +34,35 @@ if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY or not OPENAI_API_KEY:
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
+# --- Begin Helper Functions ---
+
+def chunk_text(t: str, c: int = 5000) -> List[str]:
+    r = []
+    s = 0
+    l = len(t)
+    while s < l:
+        e = s + c
+        if e >= l:
+            r.append(t[s:].strip())
+            break
+        sub = t[s:e]
+        cb = sub.rfind("```")
+        if cb != -1 and cb > c * 0.3:
+            e = s + cb
+        elif "\n\n" in sub:
+            lb = sub.rfind("\n\n")
+            if lb > c * 0.3:
+                e = s + lb
+        elif ". " in sub:
+            lp = sub.rfind(". ")
+            if lp > c * 0.3:
+                e = s + lp + 1
+        sub = t[s:e].strip()
+        if sub:
+            r.append(sub)
+        s = max(s + 1, e)
+    return r
+
 async def get_embedding(text: str) -> List[float]:
     try:
         r = await openai_client.embeddings.create(
@@ -93,7 +122,6 @@ js_click_all = """
 })();
 """
 
-# Run configuration: here we do not exclude external links so we get them, and later filter them.
 def get_run_config(with_js: bool = False) -> CrawlerRunConfig:
     kwargs = {
         "cache_mode": CacheMode.BYPASS,
@@ -104,42 +132,28 @@ def get_run_config(with_js: bool = False) -> CrawlerRunConfig:
         kwargs["js_code"] = [js_click_all]
     return CrawlerRunConfig(**kwargs)
 
-# Recursive crawl function: it now uses the passed-in URL for storage.
-async def recursive_crawl(url: str, max_depth: int = 9, current_depth: int = 0, processed: set = None):
-    if processed is None:
-        processed = set()
-    if current_depth > max_depth or url in processed:
-        return
-    processed.add(url)
-    
-    dispatcher = MemoryAdaptiveDispatcher(
-        memory_threshold_percent=85.0,
-        check_interval=1.0,
-        max_session_permit=5,
-        monitor=None
-    )
-    bc = BrowserConfig(
-        headless=True,
-        verbose=False,
-        extra_args=["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox"]
-    )
-    run_conf = get_run_config(with_js=True)
-    
-    async with AsyncWebCrawler(config=bc) as crawler:
-        result = await crawler.arun(url=url, config=run_conf)
-        if result.success:
-            # Use the input URL (not result.url) to store each page's content.
-            print(f"Crawled: {url} (depth {current_depth})")
-            await process_and_store_document(url, result.markdown_v2.raw_markdown)
-            # Get internal links from the result's links dictionary.
-            links_dict = getattr(result, "links", {})
-            internal_links = links_dict.get("internal", [])
-            for link in internal_links:
-                href = link.get("href")
-                if href and same_domain(href, url) and href not in processed:
-                    await recursive_crawl(href, max_depth, current_depth + 1, processed)
+async def get_title_and_summary(chunk: str, url: str) -> Dict[str, str]:
+    sp = ("You are an AI that extracts titles and summaries from web content chunks.\n"
+          "Return a JSON object with 'title' and 'summary' keys.")
+    uc = f"URL: {url}\n\nContent (first 1000 chars):\n{chunk[:1000]}..."
+    try:
+        r = await openai_client.chat.completions.create(
+            model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
+            messages=[
+                {"role": "system", "content": sp},
+                {"role": "user", "content": uc},
+            ],
+            temperature=0.7,
+            max_tokens=2000,
+        )
+        w = r.choices[0].message.content.strip()
+        if w.startswith("{"):
+            return json.loads(w)
         else:
-            print(f"Error crawling {url}: {result.error_message}")
+            return {"title": "Untitled", "summary": w[:200]}
+    except Exception as e:
+        print(f"Title/Summary error: {e}")
+        return {"title": "Untitled", "summary": ""}
 
 async def process_chunk(chunk: str, num: int, url: str) -> Dict[str, Any]:
     a = await get_title_and_summary(chunk, url)
@@ -174,6 +188,45 @@ async def process_and_store_document(url: str, md: str):
     processed_chunks = await asyncio.gather(*tasks)
     insert_tasks = [insert_chunk_to_supabase(item) for item in processed_chunks]
     await asyncio.gather(*insert_tasks)
+
+# Recursive crawl function to follow all sitemap/internal links
+async def recursive_crawl(url: str, max_depth: int = 9, current_depth: int = 0, processed: set = None):
+    if processed is None:
+        processed = set()
+    if current_depth > max_depth or url in processed:
+        return
+    processed.add(url)
+    
+    dispatcher = MemoryAdaptiveDispatcher(
+        memory_threshold_percent=85.0,
+        check_interval=1.0,
+        max_session_permit=5,
+        monitor=None
+    )
+    bc = BrowserConfig(
+        headless=True,
+        verbose=False,
+        extra_args=["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox"]
+    )
+    run_conf = get_run_config(with_js=True)
+    
+    async with AsyncWebCrawler(config=bc) as crawler:
+        result = await crawler.arun(url=url, config=run_conf)
+        if result.success:
+            print(f"Crawled: {url} (depth {current_depth})")
+            # Use the passed URL for storage.
+            await process_and_store_document(url, result.markdown_v2.raw_markdown)
+            # Get internal links from result.links dictionary.
+            links_dict = getattr(result, "links", {})
+            internal_links = links_dict.get("internal", [])
+            for link in internal_links:
+                href = link.get("href")
+                if href and same_domain(href, url) and href not in processed:
+                    await recursive_crawl(href, max_depth, current_depth + 1, processed)
+        else:
+            print(f"Error crawling {url}: {result.error_message}")
+
+# --- End Helper Functions ---
 
 def delete_all_chunks():
     supabase.table("rag_chunks").delete().neq("id", "").execute()
@@ -262,7 +315,7 @@ async def main():
                     fu = format_sitemap_url(url_input)
                     found = get_urls_from_sitemap(fu)
                     if found:
-                        # Crawl every URL from the sitemap.
+                        # Crawl every URL from the sitemap
                         for link in found:
                             await recursive_crawl(link, max_depth=9)
                     else:
