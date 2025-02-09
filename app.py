@@ -4,6 +4,11 @@ import os
 os.system('playwright install')
 os.system('playwright install-deps')
 
+import subprocess
+try:
+    subprocess.run(["python", "-m", "playwright", "install"], check=True)
+except Exception as e:
+    print(f"Playwright installation failed: {e}")
 
 import streamlit as st
 import asyncio
@@ -47,7 +52,6 @@ from crawl4ai.extraction_strategy import JsonCssExtractionStrategy
 # --------------------------------------------------
 from openai import OpenAI
 client = OpenAI(api_key=OPENAI_API_KEY)
-# Optionally, test the client:
 try:
     _ = client.models.list()
     st.write("OpenAI client initialized successfully.")
@@ -81,24 +85,40 @@ product_schema = {
 }
 
 # --------------------------------------------------
+# Available Sites (Dynamic)
+# --------------------------------------------------
+AVAILABLE_SITES = {
+    "EcommerceSite": "https://example-ecommerce.com/search?q={query}",
+    "Facebook Marketplace": "https://www.facebook.com/marketplace/search/?query={query}",
+    "eBay": "https://www.ebay.com/sch/i.html?_nkw={query}"
+}
+
+# Let the user select which sites to search.
+selected_sites = st.sidebar.multiselect(
+    "Select sites to search:",
+    options=list(AVAILABLE_SITES.keys()),
+    default=list(AVAILABLE_SITES.keys())
+)
+
+# --------------------------------------------------
 # Dynamic Target URL Generation
 # --------------------------------------------------
-def get_target_urls(query: str) -> dict:
+def get_target_urls(query: str, sites: List[str]) -> dict:
     """
-    Generate search URLs for different target sites.
+    Generate search URLs for the selected target sites.
     Dynamically adjust the URLs based on the query.
-    If "used" is in the query, append "used" to the Facebook Marketplace and eBay URLs.
-    Replace these example URLs with your actual target URLs.
+    If "used" is in the query, append "used" to the query string for Facebook Marketplace and eBay.
     """
     query_encoded = query.replace(" ", "+")
     urls = {}
-    urls["EcommerceSite"] = f"https://example-ecommerce.com/search?q={query_encoded}"
-    if "used" in query.lower():
-        urls["Facebook Marketplace"] = f"https://www.facebook.com/marketplace/search/?query={query_encoded}+used"
-        urls["eBay"] = f"https://www.ebay.com/sch/i.html?_nkw={query_encoded}+used"
-    else:
-        urls["Facebook Marketplace"] = f"https://www.facebook.com/marketplace/search/?query={query_encoded}"
-        urls["eBay"] = f"https://www.ebay.com/sch/i.html?_nkw={query_encoded}"
+    for site in sites:
+        base_url = AVAILABLE_SITES[site]
+        # Modify query if necessary.
+        if site in ["Facebook Marketplace", "eBay"] and "used" in query.lower():
+            final_query = f"{query_encoded}+used"
+        else:
+            final_query = query_encoded
+        urls[site] = base_url.format(query=final_query)
     return urls
 
 # --------------------------------------------------
@@ -110,6 +130,7 @@ async def scrape_site_css(site: str, url: str) -> List[Product]:
     Returns a list of Product objects.
     """
     # Force Chromium to avoid frozen WebKit issues.
+    browser_conf = BrowserConfig(headless=True, browser="chromium")
     run_conf = CrawlerRunConfig(
         cache_mode=CacheMode.BYPASS,
         extraction_strategy=JsonCssExtractionStrategy(product_schema)
@@ -137,12 +158,12 @@ async def scrape_site_css(site: str, url: str) -> List[Product]:
         st.error(f"Error scraping {site}: {e}")
     return products
 
-async def scrape_all_sites(query: str) -> List[Product]:
+async def scrape_all_sites(query: str, sites: List[str]) -> List[Product]:
     """
-    Concurrently scrape each target site for the query.
+    Concurrently scrape each selected target site for the query.
     Returns a combined list of Product objects.
     """
-    target_urls = get_target_urls(query)
+    target_urls = get_target_urls(query, sites)
     tasks = [scrape_site_css(site, url) for site, url in target_urls.items()]
     results = await asyncio.gather(*tasks)
     all_products = [prod for sublist in results for prod in sublist]
@@ -253,7 +274,7 @@ if st.button("Search & Store Products"):
     if user_query:
         st.session_state.conversation.append({"sender": "user", "message": f"Scrape: {user_query}"})
         with st.spinner("Scraping relevant sites..."):
-            all_products = asyncio.run(scrape_all_sites(user_query))
+            all_products = asyncio.run(scrape_all_sites(user_query, selected_sites))
         for prod in all_products:
             insert_product_to_supabase_dynamic(prod)
         if all_products:
@@ -302,7 +323,7 @@ st.sidebar.markdown(
     """
     **Scraping & Storing Products:**
     1. Enter a product query (e.g., "used iPhone", "budget laptop") and click "Search & Store Products".
-    2. The app scrapes multiple sites (using dynamic URLs based on your query), extracts product details, and stores them in Supabase using a dynamic schema.
+    2. The app scrapes multiple sites (the sites are determined by your selection in the sidebar), extracts product details, and stores them in Supabase using a dynamic schema.
     
     **Agent Query:**
     1. After products are stored, enter an agent query (e.g., "What is the best product and why?").
