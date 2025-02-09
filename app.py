@@ -1,3 +1,8 @@
+import os
+
+os.system('playwright install')
+os.system('playwright install-deps')
+
 import subprocess
 
 try:
