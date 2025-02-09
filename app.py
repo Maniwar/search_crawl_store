@@ -1,5 +1,6 @@
 import os
 
+# Install Playwright browsers and dependencies at runtime.
 os.system('playwright install')
 os.system('playwright install-deps')
 
@@ -157,8 +158,9 @@ def insert_product_to_supabase_dynamic(product: Product):
         "data": product.dict()  # Entire product as JSON
     }
     response = supabase.table("products").insert(data).execute()
-    if response.error:
-        st.error(f"Error inserting product: {response.error.message}")
+    # Use dictionary-style access to check for an error
+    if response.get("error"):
+        st.error(f"Error inserting product: {response.get('error').get('message', '')}")
     else:
         st.success("Product inserted successfully!")
 
@@ -168,11 +170,11 @@ def get_all_products_dynamic() -> List[Product]:
     Converts the JSONB 'data' column back into Product objects.
     """
     response = supabase.table("products").select("*").execute()
-    if response.error:
-        st.error(f"Error retrieving products: {response.error.message}")
+    if response.get("error"):
+        st.error(f"Error retrieving products: {response.get('error').get('message', '')}")
         return []
     products = []
-    for record in response.data:
+    for record in response.get("data", []):
         try:
             # Expect the dynamic product data to be stored in record["data"]
             prod = Product(**record["data"])
@@ -259,7 +261,7 @@ st.sidebar.markdown(
        - Products are shown in a chat-like interface with clickable links, prices, and descriptions.
     
     **Note:**  
-    - Adjust the extraction schema for each site’s HTML structure.
+    - Adjust the extraction schema for each site's HTML structure.
     - Ensure your Supabase table is set up with a JSONB column (named "data") to support the dynamic schema.
     """
 )
