@@ -21,3 +21,13 @@ libpangocairo-1.0-0
 libcairo-gobject2
 libgdk-pixbuf-2.0-0
 libx11-xcb1
+# Add these additional dependencies
+libxslt1.1
+libwebpdemux2
+libharfbuzz-icu0
+libenchant-2-2
+libhyphen0
+libgdk-pixbuf2.0-0
+libevent-2.1-7
+libopus0
+libwayland-client0
