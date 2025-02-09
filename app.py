@@ -6,6 +6,7 @@ os.system('playwright install-deps')
 import asyncio
 import json
 import requests
+import re
 import streamlit as st
 from datetime import datetime, timezone
 from typing import List, Dict, Any
@@ -26,10 +27,6 @@ from crawl4ai import (
     DisplayMode
 )
 from crawl4ai.async_dispatcher import MemoryAdaptiveDispatcher
-
-# Imports for markdown generation and content filtering using LLMContentFilter
-from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
-from crawl4ai.content_filter_strategy import LLMContentFilter
 
 load_dotenv()
 
@@ -85,18 +82,25 @@ async def get_embedding(text: str) -> List[float]:
         print(f"Embedding error: {e}")
         return [0.0] * 1536
 
+def highlight_query(text: str, query: str) -> str:
+    """Highlights query terms in the text using HTML <mark> tags."""
+    terms = query.split()
+    for term in terms:
+        text = re.sub(f"({re.escape(term)})", r"<mark>\1</mark>", text, flags=re.IGNORECASE)
+    return text
+
 def retrieve_relevant_documentation(query: str) -> str:
+    """Retrieves the best-matching document and highlights query terms."""
     e = asyncio.run(get_embedding(query))
     r = supabase.rpc("match_documents", {"query_embedding": e, "match_count": 5}).execute()
     d = r.data
     if not d:
         return "No relevant documentation found."
-    parts = []
-    for row in d:
-        parts.append(
-            f"\n# {row['title']}\n\n{row['content'][:1000]}\n...\nSource: {row['url']}\nSimilarity: {row['similarity']:.3f}\n"
-        )
-    return "\n\n---\n\n".join(parts)
+    # Select the document with the highest similarity score.
+    best = max(d, key=lambda x: x.get("similarity", 0))
+    # Highlight query terms in the full content.
+    snippet = highlight_query(best["content"], query)
+    return f"\n# {best['title']}\n\n{snippet}\n...\nSource: {best['url']}\nSimilarity: {best['similarity']:.3f}\n"
 
 def get_urls_from_sitemap(u: str) -> List[str]:
     try:
@@ -121,19 +125,7 @@ def format_sitemap_url(u: str) -> str:
     return u
 
 def get_run_config(with_js: bool = False) -> CrawlerRunConfig:
-    # Use LLMContentFilter to extract core content as fit_markdown.
-    llm_filter = LLMContentFilter(
-        provider="openai/gpt-4o",
-        api_token=os.getenv("OPENAI_API_KEY"),
-        chunk_token_threshold=4096,
-        instruction="""
-        Extract the main content of this page.
-        Remove navigation menus, ads, sidebars, footers, cookie notices, and non-essential UI elements.
-        Return clean markdown with proper headers and code blocks.
-        """,
-        verbose=True
-    )
-    md_generator = DefaultMarkdownGenerator(content_filter=llm_filter)
+    # Use default conversion to get full raw markdown.
     kwargs = {
         "cache_mode": CacheMode.BYPASS,
         "stream": False,
@@ -141,8 +133,7 @@ def get_run_config(with_js: bool = False) -> CrawlerRunConfig:
         "wait_for_images": True,
         "delay_before_return_html": 1.0,
         "excluded_tags": ["header", "footer", "nav", "aside"],
-        "word_count_threshold": 50,
-        "markdown_generator": md_generator
+        "word_count_threshold": 50
     }
     if with_js:
         kwargs["js_code"] = [js_click_all]
@@ -371,21 +362,18 @@ async def main():
                 with st.spinner("Crawling & Processing..."):
                     fu = format_sitemap_url(url_input)
                     found = get_urls_from_sitemap(fu)
-                    # When no sitemap is found, remove the literal "/sitemap.xml" suffix if present.
-                    if not found:
-                        if url_input.endswith("/sitemap.xml"):
-                            su = url_input[:-len("/sitemap.xml")]
-                        else:
-                            su = url_input
-                        if follow_links_recursively:
-                            await recursive_crawl(su, max_depth=9)
-                        else:
-                            await crawl_parallel([su], max_concurrent=max_concurrent)
-                    else:
-                        if follow_links_recursively:
+                    if follow_links_recursively:
+                        if found:
                             await recursive_crawl(found[0], max_depth=9)
                         else:
+                            su = url_input[:-len("/sitemap.xml")] if url_input.endswith("/sitemap.xml") else url_input
+                            await recursive_crawl(su, max_depth=9)
+                    else:
+                        if found:
                             await crawl_parallel(found, max_concurrent=max_concurrent)
+                        else:
+                            su = url_input[:-len("/sitemap.xml")] if url_input.endswith("/sitemap.xml") else url_input
+                            await crawl_parallel([su], max_concurrent=max_concurrent)
                 st.session_state.urls_processed.add(url_input)
                 st.session_state.processing_complete = True
                 st.session_state.is_processing = False
