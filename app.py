@@ -99,7 +99,7 @@ def extract_reference_snippet(content: str, query: str, snippet_length: int = 30
         snippet = content[start:start + snippet_length]
     else:
         snippet = content[:snippet_length]
-    # Highlight each term (skip words starting with "http")
+    # Highlight query terms (skip words starting with "http")
     def highlight_word(word):
         if word.lower().startswith("http"):
             return word
@@ -111,7 +111,7 @@ def extract_reference_snippet(content: str, query: str, snippet_length: int = 30
     return highlighted
 
 def retrieve_relevant_documentation(query: str) -> str:
-    """Retrieves the best-matching document from Supabase and returns a formatted reference block."""
+    """Retrieves the best-matching document from Supabase and returns a reference block with a highlighted snippet."""
     e = asyncio.run(get_embedding(query))
     r = supabase.rpc("match_documents", {"query_embedding": e, "match_count": 5}).execute()
     d = r.data
@@ -205,6 +205,7 @@ async def process_and_store_document(url: str, md: str):
     await asyncio.gather(*insert_tasks)
 
 # --- UI Progress Widget (Sidebar) ---
+
 def init_progress_state():
     if "processing_urls" not in st.session_state:
         st.session_state.processing_urls = []
@@ -220,6 +221,7 @@ def remove_processing_url(url: str):
     update_progress()
 
 def update_progress():
+    # Deduplicate and display the currently processing URLs in the sidebar.
     unique_urls = list(dict.fromkeys(st.session_state.get("processing_urls", [])))
     st.sidebar.markdown("### Currently Processing URLs:\n" +
                         "\n".join(f"- {url}" for url in unique_urls))
@@ -345,16 +347,16 @@ async def main():
         st.session_state.suggested_questions = None
     if "processing_urls" not in st.session_state:
         st.session_state.processing_urls = []
-
+    
     st.session_state.progress_placeholder = st.sidebar.empty()
     update_progress()
-
+    
     st.title("Dynamic RAG Chat System (Supabase)")
     db_stats = get_db_stats()
     if db_stats and db_stats["doc_count"] > 0:
         st.session_state.processing_complete = True
         st.session_state.urls_processed = set(db_stats["urls"])
-
+    
     if db_stats and db_stats["doc_count"] > 0:
         st.success("💡 System is ready with existing knowledge base (Supabase)!")
         with st.expander("Knowledge Base Information", expanded=True):
@@ -369,10 +371,10 @@ async def main():
 """)
     else:
         st.info("👋 Welcome! Start by adding a website to create your knowledge base.")
-
+    
     max_concurrent = st.slider("Max concurrent URLs", min_value=1, max_value=50, value=10)
     follow_links_recursively = st.checkbox("Follow links recursively", value=True)
-
+    
     ic, cc = st.columns([1, 2])
     with ic:
         st.subheader("Add Content to RAG System")
