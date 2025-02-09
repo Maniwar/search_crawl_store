@@ -158,9 +158,8 @@ def insert_product_to_supabase_dynamic(product: Product):
         "data": product.dict()  # Entire product as JSON
     }
     response = supabase.table("products").insert(data).execute()
-    # Use dictionary-style access to check for an error
-    if response.get("error"):
-        st.error(f"Error inserting product: {response.get('error').get('message', '')}")
+    if response.error:
+        st.error(f"Error inserting product: {response.error.message}")
     else:
         st.success("Product inserted successfully!")
 
@@ -170,11 +169,11 @@ def get_all_products_dynamic() -> List[Product]:
     Converts the JSONB 'data' column back into Product objects.
     """
     response = supabase.table("products").select("*").execute()
-    if response.get("error"):
-        st.error(f"Error retrieving products: {response.get('error').get('message', '')}")
+    if response.error:
+        st.error(f"Error retrieving products: {response.error.message}")
         return []
     products = []
-    for record in response.get("data", []):
+    for record in response.data:
         try:
             # Expect the dynamic product data to be stored in record["data"]
             prod = Product(**record["data"])
