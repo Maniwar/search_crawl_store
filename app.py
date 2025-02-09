@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 from supabase import create_client, Client
 from openai import AsyncOpenAI
 
-# Advanced imports for Crawl4AI
+# Advanced imports for Crawl4AI, dispatchers, and rate limiting
 from crawl4ai import (
     AsyncWebCrawler,
     BrowserConfig,
@@ -37,7 +37,7 @@ if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY or not OPENAI_API_KEY:
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
-# --- Helper Functions ---
+# --- Helper Functions (unchanged except for progress updates) ---
 
 def chunk_text(t: str, c: int = 5000) -> List[str]:
     r = []
@@ -125,14 +125,13 @@ js_click_all = """
 })();
 """
 
-# Build a run configuration with advanced options
 def get_run_config(with_js: bool = False) -> CrawlerRunConfig:
     kwargs = {
         "cache_mode": CacheMode.BYPASS,
         "stream": False,
         "exclude_external_links": False,
         "wait_for_images": True,
-        "delay_before_return_html": 1.0  # extra delay for dynamic content
+        "delay_before_return_html": 1.0
     }
     if with_js:
         kwargs["js_code"] = [js_click_all]
@@ -193,9 +192,23 @@ async def process_and_store_document(url: str, md: str):
     insert_tasks = [insert_chunk_to_supabase(item) for item in processed_chunks]
     await asyncio.gather(*insert_tasks)
 
-# Advanced parallel crawling using arun_many() with MemoryAdaptiveDispatcher.
+# --- New: UI Progress Widget ---
+# We'll maintain a list in st.session_state.processing_urls.
+# And update a placeholder "progress_placeholder" to show which URLs are currently being processed.
+def init_progress_state():
+    if "processing_urls" not in st.session_state:
+        st.session_state.processing_urls = []
+
+def update_progress():
+    # This function updates the progress UI widget.
+    progress_placeholder = st.session_state.get("progress_placeholder")
+    if progress_placeholder is not None:
+        progress_placeholder.markdown("### Currently Processing URLs:\n" + "\n".join(f"- {url}" for url in st.session_state.processing_urls))
+
+# --- End UI Progress Widget ---
+
+# Advanced Parallel Crawling using arun_many() with MemoryAdaptiveDispatcher.
 async def crawl_parallel(urls: List[str], max_concurrent: int = 10):
-    # Configure advanced dispatcher with RateLimiter and CrawlerMonitor.
     dispatcher = MemoryAdaptiveDispatcher(
         memory_threshold_percent=90.0,
         check_interval=1.0,
@@ -231,6 +244,50 @@ async def crawl_parallel(urls: List[str], max_concurrent: int = 10):
             else:
                 print(f"Failed crawling {r.url}: {r.error_message}")
 
+# Recursive crawl function to follow all sitemap/internal links.
+async def recursive_crawl(url: str, max_depth: int = 9, current_depth: int = 0, processed: set = None):
+    if processed is None:
+        processed = set()
+    if current_depth > max_depth or url in processed:
+        return
+    processed.add(url)
+    
+    # Add the URL to currently processing list and update progress widget.
+    st.session_state.processing_urls.append(url)
+    update_progress()
+    
+    dispatcher = MemoryAdaptiveDispatcher(
+        memory_threshold_percent=85.0,
+        check_interval=1.0,
+        max_session_permit=5,
+        monitor=None
+    )
+    bc = BrowserConfig(
+        headless=True,
+        verbose=False,
+        extra_args=["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox"]
+    )
+    run_conf = get_run_config(with_js=True)
+    
+    async with AsyncWebCrawler(config=bc) as crawler:
+        result = await crawler.arun(url=url, config=run_conf)
+        if result.success:
+            print(f"Crawled: {url} (depth {current_depth})")
+            await process_and_store_document(url, result.markdown_v2.raw_markdown)
+            links_dict = getattr(result, "links", {})
+            internal_links = links_dict.get("internal", [])
+            for link in internal_links:
+                href = link.get("href")
+                if href and same_domain(href, url) and href not in processed:
+                    await recursive_crawl(href, max_depth, current_depth + 1, processed)
+        else:
+            print(f"Error crawling {url}: {result.error_message}")
+    
+    # Remove URL from processing list once done.
+    if url in st.session_state.processing_urls:
+        st.session_state.processing_urls.remove(url)
+    update_progress()
+
 def delete_all_chunks():
     supabase.table("rag_chunks").delete().neq("id", "").execute()
 
@@ -259,6 +316,7 @@ def get_db_stats():
 # --- Main Streamlit App ---
 async def main():
     st.set_page_config(page_title="Dynamic RAG Chat System (Supabase)", page_icon="🤖", layout="wide")
+    # Initialize session state variables.
     if "messages" not in st.session_state:
         st.session_state.messages = []
     if "processing_complete" not in st.session_state:
@@ -269,13 +327,19 @@ async def main():
         st.session_state.is_processing = False
     if "suggested_questions" not in st.session_state:
         st.session_state.suggested_questions = None
+    if "processing_urls" not in st.session_state:
+        st.session_state.processing_urls = []
+    
+    # Create a placeholder for progress updates.
+    st.session_state.progress_placeholder = st.empty()
+    update_progress()
+    
     st.title("Dynamic RAG Chat System (Supabase)")
-
     db_stats = get_db_stats()
     if db_stats and db_stats["doc_count"] > 0:
         st.session_state.processing_complete = True
         st.session_state.urls_processed = set(db_stats["urls"])
-
+    
     if db_stats and db_stats["doc_count"] > 0:
         st.success("💡 System is ready with existing knowledge base (Supabase)!")
         with st.expander("Knowledge Base Information", expanded=True):
@@ -290,7 +354,7 @@ async def main():
 """)
     else:
         st.info("👋 Welcome! Start by adding a website to create your knowledge base.")
-
+    
     ic, cc = st.columns([1, 2])
     with ic:
         st.subheader("Add Content to RAG System")
@@ -318,7 +382,6 @@ async def main():
                     fu = format_sitemap_url(url_input)
                     found = get_urls_from_sitemap(fu)
                     if found:
-                        # Crawl every URL from the sitemap concurrently.
                         await crawl_parallel(found, max_concurrent=10)
                     else:
                         su = url_input.rstrip("/sitemap.xml")
