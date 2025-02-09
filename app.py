@@ -13,7 +13,17 @@ from dataclasses import dataclass
 from dotenv import load_dotenv
 from supabase import create_client, Client
 from openai import AsyncOpenAI
-from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMode
+
+# Imports for advanced dispatchers
+from crawl4ai import (
+    AsyncWebCrawler,
+    BrowserConfig,
+    CrawlerRunConfig,
+    CacheMode,
+)
+from crawl4ai.async_dispatcher import MemoryAdaptiveDispatcher, SemaphoreDispatcher
+from crawl4ai.monitor import CrawlerMonitor, DisplayMode
+from crawl4ai.rate_limiter import RateLimiter
 
 load_dotenv()
 
@@ -163,21 +173,44 @@ def get_urls_from_sitemap(u: str) -> List[str]:
     except:
         return []
 
+# New advanced crawler using arun_many with a MemoryAdaptiveDispatcher
 async def crawl_parallel(urls: List[str], mc: int = 5):
+    # memory-based concurrency with optional rate limiting
+    dispatcher = MemoryAdaptiveDispatcher(
+        memory_threshold_percent=85.0,  # pause if memory usage > 85%
+        check_interval=1.0,
+        max_session_permit=mc,
+        rate_limiter=RateLimiter(
+            base_delay=(1.0, 2.0),
+            max_delay=30.0,
+            max_retries=2,
+            rate_limit_codes=[429, 503]
+        ),
+        monitor=CrawlerMonitor(
+            max_visible_rows=10,
+            display_mode=DisplayMode.AGGREGATED
+        )
+    )
+
     bc = BrowserConfig(headless=True, verbose=False, extra_args=["--disable-gpu","--disable-dev-shm-usage","--no-sandbox"])
-    cc = CrawlerRunConfig(cache_mode=CacheMode.BYPASS)
-    c = AsyncWebCrawler(config=bc)
-    await c.start()
-    try:
-        sem = asyncio.Semaphore(mc)
-        async def run_url(u: str):
-            async with sem:
-                r = await c.arun(url=u, config=cc, session_id="session1")
-                if r.success:
-                    await process_and_store_document(u, r.markdown_v2.raw_markdown)
-        await asyncio.gather(*(run_url(u) for u in urls))
-    finally:
-        await c.close()
+    run_conf = CrawlerRunConfig(
+        cache_mode=CacheMode.BYPASS,
+        stream=False,
+        follow_links=True,      # Enable link-following
+        max_depth=999,           # Crawl two levels deep
+        domain_restrict=True    # Restrict to same domain
+    )
+
+    async with AsyncWebCrawler(config=bc) as crawler:
+        results = await crawler.arun_many(
+            urls=urls,
+            config=run_conf,
+            dispatcher=dispatcher
+        )
+        for r in results:
+            if r.success:
+                await process_and_store_document(r.url, r.markdown_v2.raw_markdown)
+
 
 def format_sitemap_url(u: str) -> str:
     u = u.rstrip("/")
@@ -264,10 +297,10 @@ async def main():
                     fu=format_sitemap_url(url_input)
                     found=get_urls_from_sitemap(fu)
                     if found:
-                        asyncio.run(crawl_parallel(found))
+                        asyncio.run(crawl_parallel(found, mc=5))
                     else:
                         su=url_input.rstrip("/sitemap.xml")
-                        asyncio.run(crawl_parallel([su]))
+                        asyncio.run(crawl_parallel([su], mc=5))
                 st.session_state.urls_processed.add(url_input)
                 st.session_state.processing_complete=True
                 st.session_state.is_processing=False
