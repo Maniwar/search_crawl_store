@@ -230,7 +230,7 @@ if st.button("Search"):
         else:
             response_message = "Sorry, I couldn't find any products matching your query."
         st.session_state.conversation.append({"sender": "assistant", "message": response_message})
-        st.experimental_rerun()
+        st.rerun()
     else:
         st.warning("Please enter a product query.")
 
