@@ -27,6 +27,10 @@ from crawl4ai import (
 )
 from crawl4ai.async_dispatcher import MemoryAdaptiveDispatcher
 
+# Imports for markdown generation and content filtering
+from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
+from crawl4ai.content_filter_strategy import PruningContentFilter
+
 load_dotenv()
 
 # Environment variables and client setup
@@ -128,13 +132,20 @@ js_click_all = """
 """
 
 def get_run_config(with_js: bool = False) -> CrawlerRunConfig:
-    # Note: We removed unsupported keys such as "remove_selectors" and "scan_full_page"
+    # Create a PruningContentFilter with a dynamic threshold and a minimum word count.
+    prune_filter = PruningContentFilter(
+        threshold=0.5,
+        threshold_type="dynamic",
+        min_word_threshold=10
+    )
+    md_generator = DefaultMarkdownGenerator(content_filter=prune_filter)
     kwargs = {
         "cache_mode": CacheMode.BYPASS,
         "stream": False,
         "exclude_external_links": False,
         "wait_for_images": True,
-        "delay_before_return_html": 1.0
+        "delay_before_return_html": 1.0,
+        "markdown_generator": md_generator
     }
     if with_js:
         kwargs["js_code"] = [js_click_all]
@@ -229,6 +240,7 @@ async def crawl_parallel(urls: List[str], max_concurrent: int = 10):
         )
         for r in results:
             if r.success:
+                # Prefer the filtered fit_markdown output.
                 md = getattr(r, "fit_markdown", None)
                 if not md:
                     md = r.markdown_v2.raw_markdown
@@ -247,7 +259,7 @@ async def recursive_crawl(url: str, max_depth: int = 9, current_depth: int = 0, 
     st.session_state.processing_urls.append(url)
     update_progress()
     
-    await asyncio.sleep(1)  # short delay to allow page navigation to settle
+    await asyncio.sleep(1)
     
     dispatcher = MemoryAdaptiveDispatcher(
         memory_threshold_percent=85.0,
