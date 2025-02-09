@@ -3,7 +3,6 @@ import os
 # Install Playwright browsers and dependencies at runtime.
 os.system('playwright install')
 os.system('playwright install-deps')
-
 import streamlit as st
 import asyncio
 import json
@@ -106,15 +105,10 @@ async def scrape_site_css(site: str, url: str) -> List[Product]:
             except Exception as e:
                 st.error(f"Error parsing JSON from {site}: {e}")
                 extracted = []
+            # If extraction yields no results, return an empty list.
             if not isinstance(extracted, list) or not extracted:
-                # Simulate dummy output for demonstration.
-                extracted = [{
-                    "title": f"Sample {site} Product",
-                    "price": f"${round(random.uniform(50, 500), 2)}",
-                    "description": f"A sample product from {site}.",
-                    "image_url": "https://via.placeholder.com/150",
-                    "url": url + "/product/sample"
-                }]
+                st.warning(f"No product data extracted from {site}.")
+                return []
             for item in extracted:
                 try:
                     prod = Product(source=site, **item)
@@ -148,18 +142,16 @@ def insert_product_to_supabase_dynamic(product: Product):
     """
     data = {
         "source": product.source,
-        "data": product.model_dump()  # Use model_dump() instead of dict()
+        "data": product.model_dump()  # Use model_dump() per Pydantic V2
     }
     response = supabase.table("products").insert(data).execute()
-    # Convert response to a dictionary if possible.
     try:
-        resp_dict = response.model_dump()
-    except Exception:
-        resp_dict = response  # Fallback if model_dump() isn't available.
-    if "error" in resp_dict and resp_dict["error"]:
-        st.error(f"Error inserting product: {resp_dict['error']}")
-    else:
-        st.success("Product inserted successfully!")
+        if response.error:
+            st.error(f"Error inserting product: {response.error.message}")
+        else:
+            st.success("Product inserted successfully!")
+    except AttributeError:
+        st.success("Product inserted (no error attribute available).")
 
 def get_all_products_dynamic() -> List[Product]:
     """
@@ -167,17 +159,15 @@ def get_all_products_dynamic() -> List[Product]:
     Converts the JSONB 'data' column back into Product objects.
     """
     response = supabase.table("products").select("*").execute()
-    try:
-        resp_dict = response.model_dump()
-    except Exception:
-        resp_dict = response
-    if "error" in resp_dict and resp_dict["error"]:
-        st.error(f"Error retrieving products: {resp_dict['error']}")
-        return []
     products = []
-    for record in resp_dict.get("data", []):
+    try:
+        if response.error:
+            st.error(f"Error retrieving products: {response.error.message}")
+            return []
+    except AttributeError:
+        pass
+    for record in response.data:
         try:
-            # Expect the dynamic product data to be stored in record["data"]
             prod = Product(**record["data"])
             products.append(prod)
         except Exception as e:
@@ -190,7 +180,6 @@ def get_all_products_dynamic() -> List[Product]:
 st.title("Intelligent Shopping Chat with Dynamic Scraping & Supabase")
 st.write("Ask for a product (e.g., 'used iPhone') and the app will scrape multiple sites—including used item sources like Facebook Marketplace—and store results in Supabase using a dynamic schema.")
 
-# Initialize conversation history.
 if "conversation" not in st.session_state:
     st.session_state.conversation = []
 
@@ -201,7 +190,6 @@ for msg in st.session_state.conversation:
     else:
         st.markdown(f"**Assistant:** {msg['message']}")
 
-# User input for product query.
 user_query = st.text_input("Enter your product query (e.g., 'used iPhone', 'budget laptop'):")
 
 if st.button("Search"):
@@ -209,10 +197,8 @@ if st.button("Search"):
         st.session_state.conversation.append({"sender": "user", "message": user_query})
         with st.spinner("Scraping relevant sites..."):
             all_products = asyncio.run(scrape_all_sites(user_query))
-        # Insert each scraped product into Supabase using dynamic schema.
         for prod in all_products:
             insert_product_to_supabase_dynamic(prod)
-        # Build a response message.
         if all_products:
             response_message = "I found the following products:<br><br>"
             for prod in all_products:
@@ -223,11 +209,13 @@ if st.button("Search"):
         else:
             response_message = "Sorry, I couldn't find any products matching your query."
         st.session_state.conversation.append({"sender": "assistant", "message": response_message})
-        st.rerun()
+        if hasattr(st, "experimental_rerun"):
+            st.experimental_rerun()
+        else:
+            st.info("Please refresh the page to see the updated conversation.")
     else:
         st.warning("Please enter a product query.")
 
-# Option to view all products stored in Supabase.
 if st.button("View Stored Products"):
     products = get_all_products_dynamic()
     if products:
@@ -241,9 +229,6 @@ if st.button("View Stored Products"):
     else:
         st.info("No products found in the database.")
 
-# --------------------------------------------------
-# Sidebar Instructions
-# --------------------------------------------------
 st.sidebar.markdown("### Instructions")
 st.sidebar.markdown(
     """
