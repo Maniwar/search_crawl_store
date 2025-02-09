@@ -312,6 +312,8 @@ async def main():
                     st.session_state.messages.append({"role":"assistant","content":a})
                     with st.chat_message("assistant"):
                         st.markdown(a)
+                        with st.expander("References"):
+                            st.markdown(dr)
                 except Exception as e:
                     st.session_state.messages.append({"role":"assistant","content":f"Error: {e}"})
                     with st.chat_message("assistant"):
