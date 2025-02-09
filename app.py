@@ -27,6 +27,7 @@ from crawl4ai import (
 )
 from crawl4ai.async_dispatcher import MemoryAdaptiveDispatcher
 
+# Using default markdown conversion (full raw_markdown)
 load_dotenv()
 
 # Environment variables and client setup
@@ -100,7 +101,8 @@ def get_urls_from_sitemap(u: str) -> List[str]:
         r.raise_for_status()
         ro = ElementTree.fromstring(r.content)
         ns = {"ns": "http://www.sitemaps.org/schemas/sitemap/0.9"}
-        return [loc.text for loc in ro.findall(".//ns:loc", ns)]
+        # Use .strip() on each URL so that no trailing whitespace (or characters) are removed accidentally.
+        return [loc.text.strip() for loc in ro.findall(".//ns:loc", ns)]
     except Exception as e:
         print(f"Sitemap error: {e}")
         return []
@@ -116,9 +118,8 @@ def format_sitemap_url(u: str) -> str:
         u = f"https://{u}"
     return u
 
-# --- Run Configuration ---
 def get_run_config(with_js: bool = False) -> CrawlerRunConfig:
-    # Omit markdown_generator to use the default conversion (raw_markdown)
+    # Return default run configuration to get full raw markdown.
     kwargs = {
         "cache_mode": CacheMode.BYPASS,
         "stream": False,
@@ -215,7 +216,6 @@ async def crawl_parallel(urls: List[str], max_concurrent: int = 10):
         )
         for r in results:
             if r.success:
-                # Always use raw_markdown to get the full content.
                 md = r.markdown_v2.raw_markdown
                 await process_and_store_document(r.url, md)
             else:
@@ -253,7 +253,6 @@ async def recursive_crawl(url: str, max_depth: int = 9, current_depth: int = 0, 
             internal_links = links_dict.get("internal", [])
             for link in internal_links:
                 href = link.get("href")
-                # Convert relative URLs to absolute using urljoin.
                 absolute_url = urljoin(url, href) if href else None
                 if absolute_url and same_domain(absolute_url, url) and absolute_url not in processed:
                     await recursive_crawl(absolute_url, max_depth, current_depth + 1, processed)
