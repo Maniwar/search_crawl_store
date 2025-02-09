@@ -27,10 +27,6 @@ from crawl4ai import (
 )
 from crawl4ai.async_dispatcher import MemoryAdaptiveDispatcher
 
-# Imports for markdown generation and content filtering using LLMContentFilter
-from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
-from crawl4ai.content_filter_strategy import LLMContentFilter
-
 load_dotenv()
 
 # Environment variables and client setup
@@ -120,20 +116,9 @@ def format_sitemap_url(u: str) -> str:
         u = f"https://{u}"
     return u
 
+# --- Run Configuration ---
 def get_run_config(with_js: bool = False) -> CrawlerRunConfig:
-    # Use LLMContentFilter to extract core content as fit_markdown.
-    llm_filter = LLMContentFilter(
-        provider="openai/gpt-4o",
-        api_token=os.getenv("OPENAI_API_KEY"),
-        chunk_token_threshold=4096,
-        instruction="""
-        Extract the main content of this page.
-        Remove navigation menus, ads, sidebars, footers, cookie notices, and non-essential UI elements.
-        Return clean markdown with proper headers and code blocks.
-        """,
-        verbose=True
-    )
-    md_generator = DefaultMarkdownGenerator(content_filter=llm_filter)
+    # Omit markdown_generator to use the default conversion (raw_markdown)
     kwargs = {
         "cache_mode": CacheMode.BYPASS,
         "stream": False,
@@ -141,8 +126,7 @@ def get_run_config(with_js: bool = False) -> CrawlerRunConfig:
         "wait_for_images": True,
         "delay_before_return_html": 1.0,
         "excluded_tags": ["header", "footer", "nav", "aside"],
-        "word_count_threshold": 50,
-        "markdown_generator": md_generator
+        "word_count_threshold": 50
     }
     if with_js:
         kwargs["js_code"] = [js_click_all]
@@ -231,9 +215,8 @@ async def crawl_parallel(urls: List[str], max_concurrent: int = 10):
         )
         for r in results:
             if r.success:
-                md = getattr(r, "fit_markdown", None)
-                if not md:
-                    md = r.markdown_v2.raw_markdown
+                # Always use raw_markdown to get the full content.
+                md = r.markdown_v2.raw_markdown
                 await process_and_store_document(r.url, md)
             else:
                 print(f"Failed crawling {r.url}: {r.error_message}")
@@ -264,9 +247,7 @@ async def recursive_crawl(url: str, max_depth: int = 9, current_depth: int = 0, 
         result = await crawler.arun(url=url, config=run_conf)
         if result.success:
             print(f"Crawled: {url} (depth {current_depth})")
-            md = getattr(result, "fit_markdown", None)
-            if not md:
-                md = result.markdown_v2.raw_markdown
+            md = result.markdown_v2.raw_markdown
             await process_and_store_document(url, md)
             links_dict = getattr(result, "links", {})
             internal_links = links_dict.get("internal", [])
