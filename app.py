@@ -4,11 +4,6 @@ import os
 os.system('playwright install')
 os.system('playwright install-deps')
 
-import subprocess
-try:
-    subprocess.run(["python", "-m", "playwright", "install"], check=True)
-except Exception as e:
-    print(f"Playwright installation failed: {e}")
 
 import streamlit as st
 import asyncio
@@ -20,7 +15,7 @@ from pydantic import BaseModel
 # --------------------------------------------------
 # SECRETS & CONFIGURATION
 # --------------------------------------------------
-# In your .streamlit/secrets.toml, add:
+# Ensure your .streamlit/secrets.toml has the following:
 #
 # [supabase]
 # url = "https://your-supabase-url.supabase.co"
@@ -54,6 +49,13 @@ from crawl4ai.extraction_strategy import JsonCssExtractionStrategy
 import openai
 openai.api_key = OPENAI_API_KEY
 
+# Test the OpenAI client initialization.
+try:
+    _ = openai.Model.list()  # This will raise an exception if the API key is invalid.
+    st.write("OpenAI client initialized successfully.")
+except Exception as e:
+    st.error(f"Error initializing OpenAI client: {e}")
+
 # --------------------------------------------------
 # Data Model for Product Data
 # --------------------------------------------------
@@ -86,8 +88,8 @@ product_schema = {
 def get_target_urls(query: str) -> dict:
     """
     Generate search URLs for different target sites.
-    The URLs change based on keywords in the query. For example, if the query contains "used",
-    "used" is appended to the search parameters for Facebook Marketplace and eBay.
+    Dynamically adjust the URLs based on the query.
+    For example, if "used" is in the query, append "used" to the search parameters.
     Replace these example URLs with your actual target URLs.
     """
     query_encoded = query.replace(" ", "+")
@@ -194,14 +196,14 @@ def get_all_products_dynamic() -> List[Product]:
 # --------------------------------------------------
 def agent_answer(query: str) -> str:
     """
-    Retrieves all stored products, builds a context prompt, and uses OpenAI's Chat API
+    Retrieves all stored products, builds a context prompt, and uses OpenAI's ChatCompletion API
     to answer the user's query about which products are good.
     """
     products = get_all_products_dynamic()
     if not products:
         return "No product data available to answer your query."
     
-    # Build a context string from product records.
+    # Build context from product records.
     context_lines = []
     for prod in products:
         line = f"{prod.source}: {prod.title} at {prod.price}. {prod.description}"
@@ -239,7 +241,7 @@ st.write("Ask for a product (e.g., 'used iPhone') and the app will scrape multip
 if "conversation" not in st.session_state:
     st.session_state.conversation = []
 
-# Display conversation with proper HTML rendering.
+# Display conversation with HTML formatting.
 for msg in st.session_state.conversation:
     if msg["sender"] == "user":
         st.markdown(f"**You:** {msg['message']}", unsafe_allow_html=True)
