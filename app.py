@@ -1,6 +1,8 @@
 import nest_asyncio
 nest_asyncio.apply()
 import os
+os.system('playwright install')
+os.system('playwright install-deps')
 import asyncio
 import json
 import requests
