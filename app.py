@@ -1,10 +1,8 @@
 import nest_asyncio
 nest_asyncio.apply()
-
 import os
 os.system('playwright install')
 os.system('playwright install-deps')
-
 import asyncio
 import json
 import requests
@@ -87,7 +85,7 @@ async def get_embedding(text: str) -> List[float]:
 def extract_reference_snippet(content: str, query: str, snippet_length: int = 300) -> str:
     """
     Finds the first occurrence of any query term in the content and returns a substring
-    around that point with the query terms highlighted (using inline CSS).
+    around that point with the query terms highlighted using inline CSS.
     """
     query_terms = query.split()
     first_index = None
@@ -113,7 +111,7 @@ def extract_reference_snippet(content: str, query: str, snippet_length: int = 30
     return highlighted
 
 def retrieve_relevant_documentation(query: str) -> str:
-    """Retrieves the best-matching document from Supabase and returns a reference block with a highlighted snippet."""
+    """Retrieves the best-matching document from Supabase and returns a formatted reference block."""
     e = asyncio.run(get_embedding(query))
     r = supabase.rpc("match_documents", {"query_embedding": e, "match_count": 5}).execute()
     d = r.data
@@ -151,7 +149,7 @@ def format_sitemap_url(u: str) -> str:
     return u
 
 def get_run_config(with_js: bool = False) -> CrawlerRunConfig:
-    # Use default conversion to get full raw markdown (no LLM filtering)
+    # We want the full raw markdown (no LLM filtering).
     kwargs = {
         "cache_mode": CacheMode.BYPASS,
         "stream": False,
@@ -207,21 +205,22 @@ async def process_and_store_document(url: str, md: str):
     await asyncio.gather(*insert_tasks)
 
 # --- UI Progress Widget (Sidebar) ---
-# Use a set to avoid duplicates for currently processing URLs.
 def init_progress_state():
     if "processing_urls" not in st.session_state:
-        st.session_state.processing_urls = set()
+        st.session_state.processing_urls = []
 
 def add_processing_url(url: str):
-    st.session_state.processing_urls.add(url)
+    if url not in st.session_state.processing_urls:
+        st.session_state.processing_urls.append(url)
     update_progress()
 
 def remove_processing_url(url: str):
-    st.session_state.processing_urls.discard(url)
+    if url in st.session_state.processing_urls:
+        st.session_state.processing_urls.remove(url)
     update_progress()
 
 def update_progress():
-    unique_urls = sorted(list(st.session_state.get("processing_urls", set())))
+    unique_urls = list(dict.fromkeys(st.session_state.get("processing_urls", [])))
     st.sidebar.markdown("### Currently Processing URLs:\n" +
                         "\n".join(f"- {url}" for url in unique_urls))
 
@@ -344,19 +343,18 @@ async def main():
         st.session_state.is_processing = False
     if "suggested_questions" not in st.session_state:
         st.session_state.suggested_questions = None
-    # Use a set for currently processing URLs in the sidebar.
     if "processing_urls" not in st.session_state:
-        st.session_state.processing_urls = set()
-    
+        st.session_state.processing_urls = []
+
     st.session_state.progress_placeholder = st.sidebar.empty()
     update_progress()
-    
+
     st.title("Dynamic RAG Chat System (Supabase)")
     db_stats = get_db_stats()
     if db_stats and db_stats["doc_count"] > 0:
         st.session_state.processing_complete = True
         st.session_state.urls_processed = set(db_stats["urls"])
-    
+
     if db_stats and db_stats["doc_count"] > 0:
         st.success("💡 System is ready with existing knowledge base (Supabase)!")
         with st.expander("Knowledge Base Information", expanded=True):
@@ -371,10 +369,10 @@ async def main():
 """)
     else:
         st.info("👋 Welcome! Start by adding a website to create your knowledge base.")
-    
+
     max_concurrent = st.slider("Max concurrent URLs", min_value=1, max_value=50, value=10)
     follow_links_recursively = st.checkbox("Follow links recursively", value=True)
-    
+
     ic, cc = st.columns([1, 2])
     with ic:
         st.subheader("Add Content to RAG System")
@@ -407,6 +405,7 @@ async def main():
             if url_input not in st.session_state.urls_processed:
                 st.session_state.is_processing = True
                 with st.spinner("Crawling & Processing..."):
+                    # Try to get sitemap URLs; if not found, use the URL as-is.
                     if "sitemap.xml" in url_input:
                         found = get_urls_from_sitemap(url_input)
                     else:
@@ -414,8 +413,7 @@ async def main():
                         found = get_urls_from_sitemap(fu)
                         if not found:
                             found = [url_input]
-                    # Create a global semaphore for all recursive crawling tasks.
-                    sema = asyncio.Semaphore(max_concurrent)
+                    sema = asyncio.Semaphore(max_concurrent)  # Global concurrency limit
                     if follow_links_recursively:
                         await recursive_crawl(found[0], max_depth=9, sema=sema)
                     else:
