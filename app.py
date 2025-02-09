@@ -97,7 +97,7 @@ async def get_title_and_summary(chunk: str, url: str) -> Dict[str, str]:
     uc = f"URL: {url}\n\nContent (first 1000 chars):\n{chunk[:1000]}..."
     try:
         r = await openai_client.chat.completions.create(
-            model=os.getenv("LLM_MODEL", "gpt-4"),
+            model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
             messages=[
                 {"role": "system", "content": sp},
                 {"role": "user", "content": uc},
@@ -309,7 +309,7 @@ async def main():
                     {"role":"user","content":user_query}
                 ]
                 try:
-                    r=asyncio.run(openai_client.chat.completions.create(model=os.getenv("LLM_MODEL","gpt-4"),messages=msgs))
+                    r=asyncio.run(openai_client.chat.completions.create(model=os.getenv("LLM_MODEL","gpt-4o-mini"),messages=msgs))
                     a=r.choices[0].message.content
                     st.session_state.messages.append({"role":"assistant","content":a})
                     with st.chat_message("assistant"):
