@@ -1,4 +1,3 @@
-```python
 import nest_asyncio
 nest_asyncio.apply()
 import os
@@ -335,4 +334,3 @@ async def main():
 
 if __name__=="__main__":
     asyncio.run(main())
-```
