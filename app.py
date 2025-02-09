@@ -22,7 +22,6 @@ from crawl4ai import (
     CacheMode,
 )
 from crawl4ai.async_dispatcher import MemoryAdaptiveDispatcher, SemaphoreDispatcher
-from crawl4ai.monitor import CrawlerMonitor, DisplayMode
 from crawl4ai.rate_limiter import RateLimiter
 
 load_dotenv()
@@ -186,10 +185,7 @@ async def crawl_parallel(urls: List[str], mc: int = 5):
             max_retries=2,
             rate_limit_codes=[429, 503]
         ),
-        monitor=CrawlerMonitor(
-            max_visible_rows=10,
-            display_mode=DisplayMode.AGGREGATED
-        )
+        monitor=None
     )
 
     bc = BrowserConfig(headless=True, verbose=False, extra_args=["--disable-gpu","--disable-dev-shm-usage","--no-sandbox"])
