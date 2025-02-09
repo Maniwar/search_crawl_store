@@ -55,9 +55,9 @@ js_click_all = """
 
 # --- Helper Functions ---
 
-def chunk_text(text: str, max_chars: int = 5000) -> List[str]:
+def chunk_text(t: str, max_chars: int = 5000) -> List[str]:
     """Splits text into chunks by paragraphs for efficiency."""
-    paragraphs = text.split("\n\n")
+    paragraphs = t.split("\n\n")
     chunks = []
     current_chunk = ""
     for para in paragraphs:
@@ -104,10 +104,6 @@ def extract_reference_snippet(content: str, query: str, snippet_length: int = 30
     return snippet
 
 def retrieve_relevant_documentation(query: str) -> str:
-    """
-    Retrieves the best-matching document from Supabase, extracts a snippet
-    focused on the query terms, and returns a formatted reference block.
-    """
     e = asyncio.run(get_embedding(query))
     r = supabase.rpc("match_documents", {"query_embedding": e, "match_count": 5}).execute()
     d = r.data
@@ -206,7 +202,7 @@ def init_progress_state():
 
 def update_progress():
     st.sidebar.markdown("### Currently Processing URLs:\n" +
-                        "\n".join(f"- {url}" for url in st.session_state.processing_urls))
+                        "\n".join(f"- {url}" for url in list(dict.fromkeys(st.session_state.processing_urls))))
 
 # --- Advanced Parallel Crawling ---
 async def crawl_parallel(urls: List[str], max_concurrent: int = 10):
@@ -251,7 +247,8 @@ async def recursive_crawl(url: str, max_depth: int = 9, current_depth: int = 0, 
     if current_depth > max_depth or url in processed:
         return
     processed.add(url)
-    st.session_state.processing_urls.append(url)
+    if url not in st.session_state.processing_urls:
+        st.session_state.processing_urls.append(url)
     update_progress()
     await asyncio.sleep(1)
     dispatcher = MemoryAdaptiveDispatcher(
@@ -329,7 +326,6 @@ async def main():
     if "processing_urls" not in st.session_state:
         st.session_state.processing_urls = []
     
-    # Create sidebar progress widget.
     st.session_state.progress_placeholder = st.sidebar.empty()
     update_progress()
     
