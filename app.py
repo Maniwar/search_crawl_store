@@ -173,16 +173,11 @@ def get_urls_from_sitemap(u: str) -> List[str]:
 
 # New advanced crawler using arun_many with a MemoryAdaptiveDispatcher
 async def crawl_parallel(urls: List[str], mc: int = 5):
-    # memory-based concurrency with optional rate limiting
+    # memory-based concurrency (no rate limiting)
     dispatcher = MemoryAdaptiveDispatcher(
         memory_threshold_percent=85.0,  # pause if memory usage > 85%
         check_interval=1.0,
         max_session_permit=mc,
-        # rate_limiter=None
-            max_delay=30.0,
-            max_retries=2,
-            rate_limit_codes=[429, 503]
-        ),
         monitor=None
     )
 
