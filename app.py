@@ -9,7 +9,6 @@ from datetime import datetime, timezone
 from typing import List, Dict, Any
 from urllib.parse import urlparse
 from xml.etree import ElementTree
-from dataclasses import dataclass
 from dotenv import load_dotenv
 from supabase import create_client, Client
 from openai import AsyncOpenAI
@@ -25,7 +24,7 @@ from crawl4ai.async_dispatcher import MemoryAdaptiveDispatcher
 
 load_dotenv()
 
-# Environment variables and clients
+# Environment variables and client setup
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
@@ -35,7 +34,6 @@ if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY or not OPENAI_API_KEY:
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
-# Helper functions remain unchanged...
 async def get_embedding(text: str) -> List[float]:
     try:
         r = await openai_client.embeddings.create(
@@ -82,7 +80,7 @@ def format_sitemap_url(u: str) -> str:
         u = f"https://{u}"
     return u
 
-# Optional JavaScript snippet to click elements if needed.
+# JavaScript snippet to click on all clickable elements (if needed)
 js_click_all = """
 (async () => {
     const clickable = document.querySelectorAll("a, button");
@@ -95,18 +93,18 @@ js_click_all = """
 })();
 """
 
-# Helper to get a run config that enables link extraction.
+# Run config: note that we now set exclude_external_links to False so we can get all links.
 def get_run_config(with_js: bool = False) -> CrawlerRunConfig:
     kwargs = {
         "cache_mode": CacheMode.BYPASS,
         "stream": False,
-        "extract_links": True  # Enable link extraction so that result.links is populated
+        "exclude_external_links": False  # Do not exclude external links; we will filter later.
     }
     if with_js:
         kwargs["js_code"] = [js_click_all]
     return CrawlerRunConfig(**kwargs)
 
-# Recursive crawl function: crawls a URL, processes content, then recurses on discovered internal links.
+# Recursive crawl function to follow all internal links
 async def recursive_crawl(url: str, max_depth: int = 9, current_depth: int = 0, processed: set = None):
     if processed is None:
         processed = set()
@@ -125,7 +123,7 @@ async def recursive_crawl(url: str, max_depth: int = 9, current_depth: int = 0, 
         verbose=False,
         extra_args=["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox"]
     )
-    # Use a run config that enables JS (if needed) and link extraction.
+    # Use JS clicking if needed
     run_conf = get_run_config(with_js=True)
     
     async with AsyncWebCrawler(config=bc) as crawler:
@@ -133,11 +131,13 @@ async def recursive_crawl(url: str, max_depth: int = 9, current_depth: int = 0, 
         if result.success:
             print(f"Crawled: {url} (depth {current_depth})")
             await process_and_store_document(result.url, result.markdown_v2.raw_markdown)
-            # Now follow every extracted internal link.
-            links = getattr(result, "links", [])
-            for link in links:
-                if same_domain(link, url) and link not in processed:
-                    await recursive_crawl(link, max_depth, current_depth + 1, processed)
+            # Extract internal links from the result's links dictionary.
+            links_dict = getattr(result, "links", {})
+            internal_links = links_dict.get("internal", [])
+            for link in internal_links:
+                href = link.get("href")
+                if href and href not in processed:
+                    await recursive_crawl(href, max_depth, current_depth + 1, processed)
         else:
             print(f"Error crawling {url}: {result.error_message}")
 
@@ -175,7 +175,7 @@ async def process_and_store_document(url: str, md: str):
     insert_tasks = [insert_chunk_to_supabase(item) for item in processed_chunks]
     await asyncio.gather(*insert_tasks)
 
-# The entry point for your Streamlit app.
+# Streamlit UI and main function remain largely unchanged.
 async def main():
     st.set_page_config(page_title="Dynamic RAG Chat System (Supabase)", page_icon="🤖", layout="wide")
     if "messages" not in st.session_state:
@@ -191,7 +191,6 @@ async def main():
     st.title("Dynamic RAG Chat System (Supabase)")
     
     # (Database stats and display code omitted for brevity)
-    
     ic, cc = st.columns([1, 2])
     with ic:
         st.subheader("Add Content to RAG System")
@@ -205,7 +204,7 @@ async def main():
             pb = st.button("Process URL", disabled=st.session_state.is_processing)
         with c2:
             if st.button("Clear Database", disabled=st.session_state.is_processing):
-                # delete_all_chunks() should be defined to clear the database
+                # delete_all_chunks() function should be called here if defined.
                 st.session_state.processing_complete = False
                 st.session_state.urls_processed = set()
                 st.session_state.messages = []
@@ -219,7 +218,7 @@ async def main():
                     fu = format_sitemap_url(url_input)
                     found = get_urls_from_sitemap(fu)
                     if found:
-                        # Recursively crawl all URLs from the sitemap.
+                        # Start recursive crawling using the first URL from the sitemap.
                         await recursive_crawl(found[0], max_depth=9)
                     else:
                         su = url_input.rstrip("/sitemap.xml")
@@ -245,7 +244,7 @@ async def main():
         if st.session_state.processing_complete:
             st.subheader("Chat Interface")
             for m in st.session_state.messages:
-                role = "user" if m.get("role")=="user" else "assistant"
+                role = "user" if m.get("role") == "user" else "assistant"
                 with st.chat_message(role):
                     st.markdown(m["content"])
             user_query = st.chat_input("Ask a question about the processed content...")
@@ -280,7 +279,6 @@ async def main():
         else:
             st.info("Please process a URL first to start chatting!")
     st.markdown("---")
-    # System status display (omitted for brevity)
     st.markdown("System Status: ...")
 
 if __name__ == "__main__":
