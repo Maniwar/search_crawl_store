@@ -128,12 +128,15 @@ js_click_all = """
 """
 
 def get_run_config(with_js: bool = False) -> CrawlerRunConfig:
+    # The run configuration now instructs Crawl4AI to remove common irrelevant elements
     kwargs = {
         "cache_mode": CacheMode.BYPASS,
         "stream": False,
         "exclude_external_links": False,
         "wait_for_images": True,
-        "delay_before_return_html": 1.0
+        "delay_before_return_html": 1.0,
+        "remove_selectors": [".header", ".footer", ".nav", ".sidebar", ".advertisement"],
+        "scan_full_page": True,
     }
     if with_js:
         kwargs["js_code"] = [js_click_all]
@@ -228,7 +231,6 @@ async def crawl_parallel(urls: List[str], max_concurrent: int = 10):
         )
         for r in results:
             if r.success:
-                # Use fit_markdown if available; otherwise, fall back to raw markdown.
                 md = getattr(r, "fit_markdown", None)
                 if not md:
                     md = r.markdown_v2.raw_markdown
@@ -247,7 +249,7 @@ async def recursive_crawl(url: str, max_depth: int = 9, current_depth: int = 0, 
     st.session_state.processing_urls.append(url)
     update_progress()
     
-    await asyncio.sleep(1)  # delay to allow page navigation to settle
+    await asyncio.sleep(1)  # Short delay to allow page navigation to settle
     
     dispatcher = MemoryAdaptiveDispatcher(
         memory_threshold_percent=85.0,
@@ -266,7 +268,6 @@ async def recursive_crawl(url: str, max_depth: int = 9, current_depth: int = 0, 
         result = await crawler.arun(url=url, config=run_conf)
         if result.success:
             print(f"Crawled: {url} (depth {current_depth})")
-            # Use fit_markdown if available.
             md = getattr(result, "fit_markdown", None)
             if not md:
                 md = result.markdown_v2.raw_markdown
