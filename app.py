@@ -1,3 +1,4 @@
+```python
 import nest_asyncio
 nest_asyncio.apply()
 import os
@@ -165,19 +166,20 @@ def get_urls_from_sitemap(u: str) -> List[str]:
 
 async def crawl_parallel(urls: List[str], mc: int = 5):
     bc = BrowserConfig(headless=True, verbose=False, extra_args=["--disable-gpu","--disable-dev-shm-usage","--no-sandbox"])
-    cc = CrawlerRunConfig(cache_mode=CacheMode.BYPASS)
+    cc = CrawlerRunConfig(
+        cache_mode=CacheMode.BYPASS,
+        follow_links=True,
+        max_depth=2,
+        domain_restrict=True
+    )
     c = AsyncWebCrawler(config=bc)
     await c.start()
     try:
         sem = asyncio.Semaphore(mc)
-        t = len(urls)
-        d = 0
         async def run_url(u: str):
-            nonlocal d
             async with sem:
                 r = await c.arun(url=u, config=cc, session_id="session1")
                 if r.success:
-                    d += 1
                     await process_and_store_document(u, r.markdown_v2.raw_markdown)
         await asyncio.gather(*(run_url(u) for u in urls))
     finally:
@@ -333,3 +335,4 @@ async def main():
 
 if __name__=="__main__":
     asyncio.run(main())
+```
