@@ -2,3 +2,4 @@ streamlit
 crawl4ai
 pydantic
 supabase
+playwright
