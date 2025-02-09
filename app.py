@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 from supabase import create_client, Client
 from openai import AsyncOpenAI
 
-# Advanced imports for Crawl4AI, dispatchers, and rate limiting
+# Crawl4AI imports
 from crawl4ai import (
     AsyncWebCrawler,
     BrowserConfig,
@@ -27,9 +27,9 @@ from crawl4ai import (
 )
 from crawl4ai.async_dispatcher import MemoryAdaptiveDispatcher
 
-# Imports for markdown generation and content filtering using LLMContentFilter
+# For faster markdown conversion, use a PruningContentFilter
 from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
-from crawl4ai.content_filter_strategy import LLMContentFilter
+from crawl4ai.content_filter_strategy import PruningContentFilter
 
 load_dotenv()
 
@@ -38,29 +38,14 @@ SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY or not OPENAI_API_KEY:
-    raise ValueError("Please set SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, and OPENAI_API_KEY in your environment.")
+    raise ValueError("Set SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, and OPENAI_API_KEY in your environment.")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
-# --- Define JS snippet at module level ---
-js_click_all = """
-(async () => {
-    const clickable = document.querySelectorAll("a, button");
-    for (let el of clickable) {
-        try {
-            el.click();
-            await new Promise(r => setTimeout(r, 300));
-        } catch(e) {}
-    }
-})();
-"""
-
-# --- Helper Functions ---
-
-def chunk_text(t: str, max_chars: int = 5000) -> List[str]:
-    """Splits text into chunks by paragraphs for efficiency."""
-    paragraphs = t.split("\n\n")
+# --- Optimized Chunking (paragraph-based) ---
+def chunk_text(text: str, max_chars: int = 5000) -> List[str]:
+    paragraphs = text.split("\n\n")
     chunks = []
     current_chunk = ""
     for para in paragraphs:
@@ -74,6 +59,7 @@ def chunk_text(t: str, max_chars: int = 5000) -> List[str]:
         chunks.append(current_chunk.strip())
     return chunks
 
+# --- Embedding and Storage ---
 async def get_embedding(text: str) -> List[float]:
     try:
         r = await openai_client.embeddings.create(
@@ -98,6 +84,7 @@ def retrieve_relevant_documentation(query: str) -> str:
         )
     return "\n\n---\n\n".join(parts)
 
+# --- URL Helpers ---
 def get_urls_from_sitemap(u: str) -> List[str]:
     try:
         r = requests.get(u)
@@ -120,20 +107,14 @@ def format_sitemap_url(u: str) -> str:
         u = f"https://{u}"
     return u
 
+# --- Run Configuration using PruningContentFilter (fast) ---
 def get_run_config(with_js: bool = False) -> CrawlerRunConfig:
-    # Use LLMContentFilter to extract only core content as fit_markdown.
-    llm_filter = LLMContentFilter(
-        provider="openai/gpt-4o",
-        api_token=os.getenv("OPENAI_API_KEY"),
-        chunk_token_threshold=4096,
-        instruction="""
-        Extract the main content of this page.
-        Remove navigation menus, ads, sidebars, footers, cookie notices, and other non-essential UI elements.
-        Return clean markdown with proper headers and code blocks.
-        """,
-        verbose=True
+    prune_filter = PruningContentFilter(
+        threshold=0.5,
+        threshold_type="dynamic",
+        min_word_threshold=10
     )
-    md_generator = DefaultMarkdownGenerator(content_filter=llm_filter)
+    md_generator = DefaultMarkdownGenerator(content_filter=prune_filter)
     kwargs = {
         "cache_mode": CacheMode.BYPASS,
         "stream": False,
@@ -144,8 +125,8 @@ def get_run_config(with_js: bool = False) -> CrawlerRunConfig:
         "word_count_threshold": 50,
         "markdown_generator": md_generator
     }
-    if with_js:
-        kwargs["js_code"] = [js_click_all]
+    # Optionally, you can add JS if necessary (remove if not needed)
+    # kwargs["js_code"] = [js_click_all]
     return CrawlerRunConfig(**kwargs)
 
 def extract_title_and_summary_from_markdown(md: str) -> Dict[str, str]:
@@ -222,7 +203,7 @@ async def crawl_parallel(urls: List[str], max_concurrent: int = 10):
         verbose=False,
         extra_args=["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox"]
     )
-    run_conf = get_run_config(with_js=True)
+    run_conf = get_run_config(with_js=False)
     async with AsyncWebCrawler(config=bc) as crawler:
         results = await crawler.arun_many(
             urls=urls,
@@ -259,7 +240,7 @@ async def recursive_crawl(url: str, max_depth: int = 9, current_depth: int = 0, 
         verbose=False,
         extra_args=["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox"]
     )
-    run_conf = get_run_config(with_js=True)
+    run_conf = get_run_config(with_js=False)
     async with AsyncWebCrawler(config=bc) as crawler:
         result = await crawler.arun(url=url, config=run_conf)
         if result.success:
@@ -345,10 +326,7 @@ async def main():
     else:
         st.info("👋 Welcome! Start by adding a website to create your knowledge base.")
     
-    # UI widget for concurrency.
     max_concurrent = st.slider("Max concurrent URLs", min_value=1, max_value=50, value=10)
-    
-    # Checkbox to decide whether to follow internal links recursively.
     follow_links_recursively = st.checkbox("Follow links recursively", value=True)
     
     ic, cc = st.columns([1, 2])
