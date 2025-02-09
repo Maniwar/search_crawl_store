@@ -186,7 +186,7 @@ async def crawl_parallel(urls: List[str], mc: int = 5):
         cache_mode=CacheMode.BYPASS,
         stream=False,
         follow_links=True,      # Enable link-following
-        max_depth=999,           # Crawl two levels deep
+        max_depth=9,           # Crawl  levels deep
         domain_restrict=True    # Restrict to same domain
     )
 
