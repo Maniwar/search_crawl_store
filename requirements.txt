@@ -1,5 +1,5 @@
 streamlit
-crawl4u
+crawl4ai
 supabase
 requests
 openai
