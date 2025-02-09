@@ -3,3 +3,4 @@ crawl4ai
 pydantic
 supabase
 playwright
+nest_asyncio
