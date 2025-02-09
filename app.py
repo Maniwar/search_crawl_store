@@ -206,6 +206,8 @@ async def process_and_store_document(url: str, md: str):
 def init_progress_state():
     if "processing_urls" not in st.session_state:
         st.session_state.processing_urls = []
+    if "progress_placeholder" not in st.session_state:
+        st.session_state.progress_placeholder = st.sidebar.empty()
 
 def add_processing_url(url: str):
     norm_url = normalize_url(url)
@@ -221,9 +223,8 @@ def remove_processing_url(url: str):
 
 def update_progress():
     unique_urls = list(dict.fromkeys(st.session_state.get("processing_urls", [])))
-    # Always clear previous sidebar content before updating
-    st.sidebar.empty().markdown("### Currently Processing URLs:\n" +
-        "\n".join(f"- {url}" for url in unique_urls))
+    content = "### Currently Processing URLs:\n" + "\n".join(f"- {url}" for url in unique_urls)
+    st.session_state.progress_placeholder.markdown(content)
 
 # --- Advanced Parallel Crawling ---
 async def crawl_parallel(urls: List[str], max_concurrent: int = 10):
@@ -337,6 +338,8 @@ def get_db_stats():
 # --- Main Streamlit App ---
 async def main():
     st.set_page_config(page_title="Dynamic RAG Chat System (Supabase)", page_icon="🤖", layout="wide")
+    init_progress_state()  # Initialize sidebar state
+    
     if "messages" not in st.session_state:
         st.session_state.messages = []
     if "processing_complete" not in st.session_state:
@@ -347,11 +350,8 @@ async def main():
         st.session_state.is_processing = False
     if "suggested_questions" not in st.session_state:
         st.session_state.suggested_questions = None
-    if "processing_urls" not in st.session_state:
-        init_progress_state()
     
-    st.session_state.progress_placeholder = st.sidebar.empty()
-    update_progress()
+    update_progress()  # Initial update
     
     st.title("Dynamic RAG Chat System (Supabase)")
     db_stats = get_db_stats()
