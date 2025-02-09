@@ -173,7 +173,7 @@ def get_urls_from_sitemap(u: str) -> List[str]:
 
 # New advanced crawler using arun_many with a MemoryAdaptiveDispatcher
 async def crawl_parallel(urls: List[str], mc: int = 5):
-    # memory-based concurrency (no rate limiting)
+    # Memory-based concurrency (no rate limiting)
     dispatcher = MemoryAdaptiveDispatcher(
         memory_threshold_percent=85.0,  # pause if memory usage > 85%
         check_interval=1.0,
@@ -181,13 +181,17 @@ async def crawl_parallel(urls: List[str], mc: int = 5):
         monitor=None
     )
 
-    bc = BrowserConfig(headless=True, verbose=False, extra_args=["--disable-gpu","--disable-dev-shm-usage","--no-sandbox"])
+    bc = BrowserConfig(
+        headless=True,
+        verbose=False,
+        extra_args=["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox"]
+    )
+    # Removed unsupported parameters: follow_links, max_depth, and domain_restrict.
+    # If you want to restrict crawling to the same domain, use 'exclude_external_links=True'.
     run_conf = CrawlerRunConfig(
         cache_mode=CacheMode.BYPASS,
         stream=False,
-        follow_links=True,      # Enable link-following
-        max_depth=9,           # Crawl  levels deep
-        domain_restrict=True    # Restrict to same domain
+        exclude_external_links=True
     )
 
     async with AsyncWebCrawler(config=bc) as crawler:
@@ -199,6 +203,7 @@ async def crawl_parallel(urls: List[str], mc: int = 5):
         for r in results:
             if r.success:
                 await process_and_store_document(r.url, r.markdown_v2.raw_markdown)
+
 
 
 def format_sitemap_url(u: str) -> str:
