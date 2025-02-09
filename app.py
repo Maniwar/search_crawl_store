@@ -4,11 +4,6 @@ import os
 os.system('playwright install')
 os.system('playwright install-deps')
 
-import subprocess
-try:
-    subprocess.run(["python", "-m", "playwright", "install"], check=True)
-except Exception as e:
-    print(f"Playwright installation failed: {e}")
 
 import streamlit as st
 import asyncio
@@ -115,7 +110,6 @@ async def scrape_site_css(site: str, url: str) -> List[Product]:
     Returns a list of Product objects.
     """
     # Force Chromium to avoid frozen WebKit issues.
-    browser_conf = BrowserConfig(headless=True, browser="chromium")
     run_conf = CrawlerRunConfig(
         cache_mode=CacheMode.BYPASS,
         extraction_strategy=JsonCssExtractionStrategy(product_schema)
