@@ -4,6 +4,12 @@ import os
 os.system('playwright install')
 os.system('playwright install-deps')
 
+import subprocess
+try:
+    subprocess.run(["python", "-m", "playwright", "install"], check=True)
+except Exception as e:
+    print(f"Playwright installation failed: {e}")
+
 import streamlit as st
 import asyncio
 import json
@@ -14,7 +20,7 @@ from pydantic import BaseModel
 # --------------------------------------------------
 # SECRETS & CONFIGURATION
 # --------------------------------------------------
-# In your .streamlit/secrets.toml, include:
+# Ensure your .streamlit/secrets.toml contains:
 #
 # [supabase]
 # url = "https://your-supabase-url.supabase.co"
@@ -26,7 +32,6 @@ from pydantic import BaseModel
 SUPABASE_URL = st.secrets["supabase"]["url"]
 SUPABASE_KEY = st.secrets["supabase"]["key"]
 OPENAI_API_KEY = st.secrets["crawl4ai"].get("openai_api_key")
-
 if not OPENAI_API_KEY:
     st.error("OPENAI_API_KEY is not defined in your secrets! Please add it under [crawl4ai].")
 
@@ -43,11 +48,17 @@ from crawl4ai import AsyncWebCrawler, CrawlerRunConfig, CacheMode, BrowserConfig
 from crawl4ai.extraction_strategy import JsonCssExtractionStrategy
 
 # --------------------------------------------------
-# OpenAI Client Initialization for Agent (New Interface)
+# OpenAI Client Initialization for Agent
 # --------------------------------------------------
-# Using the new interface as per your snippet.
+# Using the new interface as per your snippet:
 from openai import OpenAI
 client = OpenAI(api_key=OPENAI_API_KEY)
+# Optionally, you can test the client here:
+try:
+    test_models = client.models.list()
+    st.write("OpenAI client initialized successfully.")
+except Exception as e:
+    st.error(f"Error initializing OpenAI client: {e}")
 
 # --------------------------------------------------
 # Data Model for Product Data
