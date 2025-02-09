@@ -107,7 +107,7 @@ async def scrape_site_css(site: str, url: str) -> List[Product]:
     try:
         async with AsyncWebCrawler(config=browser_conf) as crawler:
             result = await crawler.arun(url=url, config=run_conf)
-            # result.extracted_content should be a JSON string
+            # result.extracted_content should be a JSON string.
             try:
                 extracted = json.loads(result.extracted_content)
             except Exception as e:
@@ -155,11 +155,16 @@ def insert_product_to_supabase_dynamic(product: Product):
     """
     data = {
         "source": product.source,
-        "data": product.dict()  # Entire product as JSON
+        "data": product.model_dump()  # Use model_dump() instead of dict()
     }
     response = supabase.table("products").insert(data).execute()
-    if response.error:
-        st.error(f"Error inserting product: {response.error.message}")
+    # Convert response to a dictionary if possible.
+    try:
+        resp_dict = response.model_dump()
+    except Exception:
+        resp_dict = response  # Fallback if model_dump() isn't available.
+    if "error" in resp_dict and resp_dict["error"]:
+        st.error(f"Error inserting product: {resp_dict['error']}")
     else:
         st.success("Product inserted successfully!")
 
@@ -169,11 +174,15 @@ def get_all_products_dynamic() -> List[Product]:
     Converts the JSONB 'data' column back into Product objects.
     """
     response = supabase.table("products").select("*").execute()
-    if response.error:
-        st.error(f"Error retrieving products: {response.error.message}")
+    try:
+        resp_dict = response.model_dump()
+    except Exception:
+        resp_dict = response
+    if "error" in resp_dict and resp_dict["error"]:
+        st.error(f"Error retrieving products: {resp_dict['error']}")
         return []
     products = []
-    for record in response.data:
+    for record in resp_dict.get("data", []):
         try:
             # Expect the dynamic product data to be stored in record["data"]
             prod = Product(**record["data"])
