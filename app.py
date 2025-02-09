@@ -27,7 +27,7 @@ from crawl4ai import (
 )
 from crawl4ai.async_dispatcher import MemoryAdaptiveDispatcher
 
-# Imports for markdown generation using an LLM-based filter
+# Imports for markdown generation and content filtering using LLMContentFilter
 from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
 from crawl4ai.content_filter_strategy import LLMContentFilter
 
@@ -43,19 +43,27 @@ if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY or not OPENAI_API_KEY:
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
-# --- Optimized Chunking ---
-def chunk_text(text: str, max_chars: int = 5000) -> List[str]:
-    """
-    Splits text into chunks by paragraphs.
-    First splits the text using double newlines, then combines paragraphs
-    until the limit is reached.
-    """
-    paragraphs = text.split("\n\n")
+# --- Define JS snippet at module level ---
+js_click_all = """
+(async () => {
+    const clickable = document.querySelectorAll("a, button");
+    for (let el of clickable) {
+        try {
+            el.click();
+            await new Promise(r => setTimeout(r, 300));
+        } catch(e) {}
+    }
+})();
+"""
+
+# --- Helper Functions ---
+
+def chunk_text(t: str, max_chars: int = 5000) -> List[str]:
+    """Splits text into chunks by paragraphs for efficiency."""
+    paragraphs = t.split("\n\n")
     chunks = []
     current_chunk = ""
     for para in paragraphs:
-        # If the current chunk plus the new paragraph exceeds max_chars,
-        # start a new chunk.
         if len(current_chunk) + len(para) + 2 > max_chars:
             if current_chunk:
                 chunks.append(current_chunk.strip())
@@ -66,7 +74,6 @@ def chunk_text(text: str, max_chars: int = 5000) -> List[str]:
         chunks.append(current_chunk.strip())
     return chunks
 
-# --- Embedding and Storage ---
 async def get_embedding(text: str) -> List[float]:
     try:
         r = await openai_client.embeddings.create(
@@ -91,7 +98,6 @@ def retrieve_relevant_documentation(query: str) -> str:
         )
     return "\n\n---\n\n".join(parts)
 
-# --- Sitemap and URL Helpers ---
 def get_urls_from_sitemap(u: str) -> List[str]:
     try:
         r = requests.get(u)
@@ -114,14 +120,14 @@ def format_sitemap_url(u: str) -> str:
         u = f"https://{u}"
     return u
 
-# --- Run Configuration using LLMContentFilter ---
 def get_run_config(with_js: bool = False) -> CrawlerRunConfig:
+    # Use LLMContentFilter to extract only core content as fit_markdown.
     llm_filter = LLMContentFilter(
         provider="openai/gpt-4o",
         api_token=os.getenv("OPENAI_API_KEY"),
         chunk_token_threshold=4096,
         instruction="""
-        Extract the core content of this page.
+        Extract the main content of this page.
         Remove navigation menus, ads, sidebars, footers, cookie notices, and other non-essential UI elements.
         Return clean markdown with proper headers and code blocks.
         """,
@@ -177,7 +183,6 @@ async def insert_chunk_to_supabase(d: Dict[str, Any]):
         print(f"Insert error: {e}")
 
 async def process_and_store_document(url: str, md: str):
-    # Use fast paragraph-based chunking
     chunks = chunk_text(md)
     tasks = [process_chunk(chunk, i, url) for i, chunk in enumerate(chunks)]
     processed_chunks = await asyncio.gather(*tasks)
