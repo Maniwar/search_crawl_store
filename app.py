@@ -3,6 +3,8 @@ import os
 # Install Playwright browsers and dependencies at runtime.
 os.system('playwright install')
 os.system('playwright install-deps')
+
+
 import streamlit as st
 import asyncio
 import json
@@ -13,22 +15,14 @@ from pydantic import BaseModel
 # --------------------------------------------------
 # SECRETS & CONFIGURATION
 # --------------------------------------------------
-# In your Streamlit Cloud secrets file (.streamlit/secrets.toml), add:
-#
-# [supabase]
-# url = "https://your-supabase-url.supabase.co"
-# key = "your_supabase_key_here"
-#
-# [crawl4ai]
-# openai_api_key = "your_openai_api_key_here"  # if needed for LLM-based extraction
-
+# See the instructions above for setting up .streamlit/secrets.toml
 SUPABASE_URL = st.secrets["supabase"]["url"]
 SUPABASE_KEY = st.secrets["supabase"]["key"]
+OPENAI_API_KEY = st.secrets["crawl4ai"]["openai_api_key"]
 
 # --------------------------------------------------
 # Supabase Client Initialization
 # --------------------------------------------------
-# Ensure you have installed supabase-py (pip install supabase)
 from supabase import create_client
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -39,9 +33,14 @@ from crawl4ai import AsyncWebCrawler, CrawlerRunConfig, CacheMode, BrowserConfig
 from crawl4ai.extraction_strategy import JsonCssExtractionStrategy
 
 # --------------------------------------------------
+# OpenAI Initialization for Agent
+# --------------------------------------------------
+import openai
+openai.api_key = OPENAI_API_KEY
+
+# --------------------------------------------------
 # Data Model for Product Data
 # --------------------------------------------------
-# This Pydantic model defines the fields we expect to extract.
 class Product(BaseModel):
     source: str       # Which site the product came from
     url: str          # URL of the product page
@@ -53,8 +52,6 @@ class Product(BaseModel):
 # --------------------------------------------------
 # Extraction Schema for CSS-based Parsing
 # --------------------------------------------------
-# For demonstration, we use a generic schema.
-# In production, each target site might require its own schema.
 product_schema = {
     "name": "Product",
     "baseSelector": "div.product",  # Assumes each product is wrapped in <div class="product">
@@ -72,8 +69,8 @@ product_schema = {
 # --------------------------------------------------
 def get_target_urls(query: str) -> dict:
     """
-    Given a query string, generate search URLs for different target sites.
-    In a real application, these URLs would be tailored to each target site.
+    Generate search URLs for different target sites.
+    Replace these example URLs with your actual target URLs.
     """
     return {
         "EcommerceSite": f"https://example-ecommerce.com/search?q={query}",
@@ -99,13 +96,11 @@ async def scrape_site_css(site: str, url: str) -> List[Product]:
     try:
         async with AsyncWebCrawler(config=browser_conf) as crawler:
             result = await crawler.arun(url=url, config=run_conf)
-            # result.extracted_content should be a JSON string.
             try:
                 extracted = json.loads(result.extracted_content)
             except Exception as e:
                 st.error(f"Error parsing JSON from {site}: {e}")
                 extracted = []
-            # If extraction yields no results, return an empty list.
             if not isinstance(extracted, list) or not extracted:
                 st.warning(f"No product data extracted from {site}.")
                 return []
@@ -121,13 +116,11 @@ async def scrape_site_css(site: str, url: str) -> List[Product]:
 
 async def scrape_all_sites(query: str) -> List[Product]:
     """
-    Generates target URLs for the query and concurrently scrapes each site.
+    Concurrently scrape each target site for the query.
     Returns a combined list of Product objects.
     """
     target_urls = get_target_urls(query)
-    tasks = []
-    for site, url in target_urls.items():
-        tasks.append(scrape_site_css(site, url))
+    tasks = [scrape_site_css(site, url) for site, url in target_urls.items()]
     results = await asyncio.gather(*tasks)
     all_products = [prod for sublist in results for prod in sublist]
     return all_products
@@ -137,12 +130,11 @@ async def scrape_all_sites(query: str) -> List[Product]:
 # --------------------------------------------------
 def insert_product_to_supabase_dynamic(product: Product):
     """
-    Inserts a product record into the Supabase 'products' table using a dynamic schema.
-    The full product details are stored in a JSONB column named "data".
+    Inserts a product record into Supabase using a dynamic JSONB schema.
     """
     data = {
         "source": product.source,
-        "data": product.model_dump()  # Use model_dump() per Pydantic V2
+        "data": product.model_dump()  # Using model_dump() per Pydantic V2
     }
     response = supabase.table("products").insert(data).execute()
     try:
@@ -155,7 +147,7 @@ def insert_product_to_supabase_dynamic(product: Product):
 
 def get_all_products_dynamic() -> List[Product]:
     """
-    Retrieves all product records from the Supabase 'products' table.
+    Retrieves all product records from Supabase.
     Converts the JSONB 'data' column back into Product objects.
     """
     response = supabase.table("products").select("*").execute()
@@ -175,32 +167,74 @@ def get_all_products_dynamic() -> List[Product]:
     return products
 
 # --------------------------------------------------
+# Agentic Process: LLM Answer Based on Supabase Data
+# --------------------------------------------------
+def agent_answer(query: str) -> str:
+    """
+    Retrieves all stored products, builds a context prompt, and uses OpenAI's Chat API
+    to answer the user's query about which products are good.
+    """
+    products = get_all_products_dynamic()
+    if not products:
+        return "No product data available to answer your query."
+    
+    # Build a context string from product records.
+    context_lines = []
+    for prod in products:
+        line = f"{prod.source}: {prod.title} at {prod.price}. {prod.description}"
+        context_lines.append(line)
+    context_text = "\n".join(context_lines)
+    
+    prompt = f"""Based on the following product information:
+{context_text}
+
+Answer the following query: {query}
+
+Which products are the best and why?"""
+    
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": "You are an intelligent shopping assistant."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            max_tokens=150
+        )
+        answer = response.choices[0].message["content"].strip()
+        return answer
+    except Exception as e:
+        return f"Error generating agent answer: {e}"
+
+# --------------------------------------------------
 # Streamlit Chat Interface
 # --------------------------------------------------
-st.title("Intelligent Shopping Chat with Dynamic Scraping & Supabase")
-st.write("Ask for a product (e.g., 'used iPhone') and the app will scrape multiple sites—including used item sources like Facebook Marketplace—and store results in Supabase using a dynamic schema.")
+st.title("Intelligent Shopping Chat with Agentic LLM & Supabase")
+st.write("Ask for a product (e.g., 'used iPhone') and the app will scrape multiple sites and store results in Supabase. Then, ask the agent which products are best based on the stored data.")
 
 if "conversation" not in st.session_state:
     st.session_state.conversation = []
 
-st.markdown("### Conversation")
+# Display conversation with proper HTML rendering.
 for msg in st.session_state.conversation:
     if msg["sender"] == "user":
-        st.markdown(f"**You:** {msg['message']}")
+        st.markdown(f"**You:** {msg['message']}", unsafe_allow_html=True)
     else:
-        st.markdown(f"**Assistant:** {msg['message']}")
+        st.markdown(f"**Assistant:** {msg['message']}", unsafe_allow_html=True)
 
-user_query = st.text_input("Enter your product query (e.g., 'used iPhone', 'budget laptop'):")
+# Section for scraping & storing products.
+user_query = st.text_input("Enter your product query for scraping (e.g., 'used iPhone'):")
 
-if st.button("Search"):
+if st.button("Search & Store Products"):
     if user_query:
-        st.session_state.conversation.append({"sender": "user", "message": user_query})
+        st.session_state.conversation.append({"sender": "user", "message": f"Scrape: {user_query}"})
         with st.spinner("Scraping relevant sites..."):
             all_products = asyncio.run(scrape_all_sites(user_query))
         for prod in all_products:
             insert_product_to_supabase_dynamic(prod)
         if all_products:
-            response_message = "I found the following products:<br><br>"
+            response_message = "I found and stored the following products:<br><br>"
             for prod in all_products:
                 response_message += (
                     f"**{prod.source}:** <a href='{prod.url}' target='_blank'>{prod.title}</a> - {prod.price}<br>"
@@ -216,6 +250,23 @@ if st.button("Search"):
     else:
         st.warning("Please enter a product query.")
 
+# Section for agent queries.
+agent_query = st.text_input("Enter your agent query (e.g., 'What is the best product and why?'):")
+
+if st.button("Ask Agent"):
+    if agent_query:
+        st.session_state.conversation.append({"sender": "user", "message": f"Agent Query: {agent_query}"})
+        with st.spinner("Letting the agent analyze stored products..."):
+            answer = agent_answer(agent_query)
+        st.session_state.conversation.append({"sender": "assistant", "message": answer})
+        if hasattr(st, "experimental_rerun"):
+            st.experimental_rerun()
+        else:
+            st.info("Please refresh the page to see the updated conversation.")
+    else:
+        st.warning("Please enter an agent query.")
+
+# Option to view all stored products.
 if st.button("View Stored Products"):
     products = get_all_products_dynamic()
     if products:
@@ -232,22 +283,19 @@ if st.button("View Stored Products"):
 st.sidebar.markdown("### Instructions")
 st.sidebar.markdown(
     """
-    1. **Enter a Query:**  
-       - Type the product you are looking for (e.g., "used iPhone", "budget laptop").
+    **Scraping & Storing Products:**
+    1. Enter a product query (e.g., "used iPhone", "budget laptop") and click "Search & Store Products".
+    2. The app scrapes multiple sites (using example URLs), extracts product details, and stores them in Supabase using a dynamic schema.
     
-    2. **Dynamic Scraping:**  
-       - The app builds search URLs for multiple sites (simulated for EcommerceSite, Facebook Marketplace, and eBay).
-       - It uses Crawl4AI with a CSS-based extraction strategy to scrape product details.
+    **Agent Query:**
+    1. After products are stored, enter an agent query (e.g., "What is the best product and why?").
+    2. The agent retrieves stored products, builds context from their details, and uses OpenAI to answer your query.
     
-    3. **Dynamic Schema for Supabase:**  
-       - Each scraped product is inserted into Supabase in a dynamic way by storing the full product data as JSON.
-       - This allows the schema to adapt if product fields change.
+    **Viewing Products:**
+    1. Click "View Stored Products" to see all products currently stored in Supabase.
     
-    4. **Results Display:**  
-       - Products are shown in a chat-like interface with clickable links, prices, and descriptions.
-    
-    **Note:**  
-    - Adjust the extraction schema for each site's HTML structure.
+    **Note:**
+    - Adjust the extraction schema and target URLs for your actual use case.
     - Ensure your Supabase table is set up with a JSONB column (named "data") to support the dynamic schema.
     """
 )
