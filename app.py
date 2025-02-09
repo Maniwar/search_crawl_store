@@ -85,7 +85,7 @@ async def get_embedding(text: str) -> List[float]:
 def extract_reference_snippet(content: str, query: str, snippet_length: int = 300) -> str:
     """
     Finds the first occurrence of any query term in the content and returns a substring
-    around that point with the query terms highlighted using <mark> tags.
+    around that point. The query terms are highlighted using inline CSS.
     """
     query_terms = query.split()
     first_index = None
@@ -100,10 +100,11 @@ def extract_reference_snippet(content: str, query: str, snippet_length: int = 30
     else:
         snippet = content[:snippet_length]
     for term in query_terms:
-        snippet = re.sub(f"({re.escape(term)})", r"<mark>\1</mark>", snippet, flags=re.IGNORECASE)
+        snippet = re.sub(f"({re.escape(term)})", r'<span style="background-color: yellow;">\1</span>', snippet, flags=re.IGNORECASE)
     return snippet
 
 def retrieve_relevant_documentation(query: str) -> str:
+    """Retrieves the best-matching document from Supabase and returns a reference snippet."""
     e = asyncio.run(get_embedding(query))
     r = supabase.rpc("match_documents", {"query_embedding": e, "match_count": 5}).execute()
     d = r.data
@@ -140,7 +141,7 @@ def format_sitemap_url(u: str) -> str:
     return u
 
 def get_run_config(with_js: bool = False) -> CrawlerRunConfig:
-    # Use default conversion to get full raw markdown.
+    # We no longer use LLM filtering. We want the full raw markdown.
     kwargs = {
         "cache_mode": CacheMode.BYPASS,
         "stream": False,
@@ -201,8 +202,10 @@ def init_progress_state():
         st.session_state.processing_urls = []
 
 def update_progress():
+    # Deduplicate the processing URLs and show in sidebar.
+    unique_urls = list(dict.fromkeys(st.session_state.processing_urls))
     st.sidebar.markdown("### Currently Processing URLs:\n" +
-                        "\n".join(f"- {url}" for url in list(dict.fromkeys(st.session_state.processing_urls))))
+                        "\n".join(f"- {url}" for url in unique_urls))
 
 # --- Advanced Parallel Crawling ---
 async def crawl_parallel(urls: List[str], max_concurrent: int = 10):
@@ -240,7 +243,7 @@ async def crawl_parallel(urls: List[str], max_concurrent: int = 10):
             else:
                 print(f"Failed crawling {r.url}: {r.error_message}")
 
-# --- Recursive Crawl (Parallelized with concurrency limit) ---
+# --- Recursive Crawl with Concurrency Limit ---
 async def recursive_crawl(url: str, max_depth: int = 9, current_depth: int = 0, processed: set = None):
     if processed is None:
         processed = set()
@@ -278,6 +281,7 @@ async def recursive_crawl(url: str, max_depth: int = 9, current_depth: int = 0, 
                 if absolute_url and same_domain(absolute_url, url) and absolute_url not in processed:
                     tasks.append(recursive_crawl(absolute_url, max_depth, current_depth + 1, processed))
             if tasks:
+                # Process up to 10 tasks concurrently overall.
                 await asyncio.gather(*tasks)
         else:
             print(f"Error crawling {url}: {result.error_message}")
@@ -359,7 +363,7 @@ async def main():
         st.write("Enter a website URL to process.")
         url_input = st.text_input("Website URL", key="url_input", placeholder="example.com or https://example.com")
         if url_input:
-            # If the URL contains 'sitemap.xml', use it; otherwise, generate if it's a domain URL.
+            # If the URL already contains 'sitemap.xml', use it; otherwise, generate for domain URLs.
             if "sitemap.xml" in url_input:
                 pv = url_input
             else:
