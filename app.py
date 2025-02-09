@@ -8,7 +8,7 @@ import json
 import requests
 import streamlit as st
 from datetime import datetime, timezone
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any
 from urllib.parse import urlparse
 from xml.etree import ElementTree
 from dotenv import load_dotenv
@@ -27,7 +27,7 @@ from crawl4ai import (
 )
 from crawl4ai.async_dispatcher import MemoryAdaptiveDispatcher
 
-# Use LLMContentFilter for content filtering
+# Imports for markdown generation using an LLM-based filter
 from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
 from crawl4ai.content_filter_strategy import LLMContentFilter
 
@@ -43,35 +43,30 @@ if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY or not OPENAI_API_KEY:
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
-# --- Helper Functions ---
+# --- Optimized Chunking ---
+def chunk_text(text: str, max_chars: int = 5000) -> List[str]:
+    """
+    Splits text into chunks by paragraphs.
+    First splits the text using double newlines, then combines paragraphs
+    until the limit is reached.
+    """
+    paragraphs = text.split("\n\n")
+    chunks = []
+    current_chunk = ""
+    for para in paragraphs:
+        # If the current chunk plus the new paragraph exceeds max_chars,
+        # start a new chunk.
+        if len(current_chunk) + len(para) + 2 > max_chars:
+            if current_chunk:
+                chunks.append(current_chunk.strip())
+            current_chunk = para
+        else:
+            current_chunk += ("\n\n" if current_chunk else "") + para
+    if current_chunk:
+        chunks.append(current_chunk.strip())
+    return chunks
 
-def chunk_text(t: str, c: int = 5000) -> List[str]:
-    r = []
-    s = 0
-    l = len(t)
-    while s < l:
-        e = s + c
-        if e >= l:
-            r.append(t[s:].strip())
-            break
-        sub = t[s:e]
-        cb = sub.rfind("```")
-        if cb != -1 and cb > c * 0.3:
-            e = s + cb
-        elif "\n\n" in sub:
-            lb = sub.rfind("\n\n")
-            if lb > c * 0.3:
-                e = s + lb
-        elif ". " in sub:
-            lp = sub.rfind(". ")
-            if lp > c * 0.3:
-                e = s + lp + 1
-        sub = t[s:e].strip()
-        if sub:
-            r.append(sub)
-        s = max(s + 1, e)
-    return r
-
+# --- Embedding and Storage ---
 async def get_embedding(text: str) -> List[float]:
     try:
         r = await openai_client.embeddings.create(
@@ -96,6 +91,7 @@ def retrieve_relevant_documentation(query: str) -> str:
         )
     return "\n\n---\n\n".join(parts)
 
+# --- Sitemap and URL Helpers ---
 def get_urls_from_sitemap(u: str) -> List[str]:
     try:
         r = requests.get(u)
@@ -118,29 +114,16 @@ def format_sitemap_url(u: str) -> str:
         u = f"https://{u}"
     return u
 
-# JavaScript snippet to click on all clickable elements (if needed)
-js_click_all = """
-(async () => {
-    const clickable = document.querySelectorAll("a, button");
-    for (let el of clickable) {
-        try {
-            el.click();
-            await new Promise(r => setTimeout(r, 300));
-        } catch(e) {}
-    }
-})();
-"""
-
+# --- Run Configuration using LLMContentFilter ---
 def get_run_config(with_js: bool = False) -> CrawlerRunConfig:
-    # Use LLMContentFilter to extract the main, relevant content.
     llm_filter = LLMContentFilter(
         provider="openai/gpt-4o",
         api_token=os.getenv("OPENAI_API_KEY"),
         chunk_token_threshold=4096,
         instruction="""
-        Extract the main content of this page.
+        Extract the core content of this page.
         Remove navigation menus, ads, sidebars, footers, cookie notices, and other non-essential UI elements.
-        Return the result as clean markdown with proper headers and code blocks.
+        Return clean markdown with proper headers and code blocks.
         """,
         verbose=True
     )
@@ -160,11 +143,6 @@ def get_run_config(with_js: bool = False) -> CrawlerRunConfig:
     return CrawlerRunConfig(**kwargs)
 
 def extract_title_and_summary_from_markdown(md: str) -> Dict[str, str]:
-    """
-    Extracts a title and summary from markdown.
-    Uses the first header line (starting with '#') as the title,
-    and the entire markdown as the summary.
-    """
     lines = md.splitlines()
     title = "Untitled"
     for line in lines:
@@ -199,6 +177,7 @@ async def insert_chunk_to_supabase(d: Dict[str, Any]):
         print(f"Insert error: {e}")
 
 async def process_and_store_document(url: str, md: str):
+    # Use fast paragraph-based chunking
     chunks = chunk_text(md)
     tasks = [process_chunk(chunk, i, url) for i, chunk in enumerate(chunks)]
     processed_chunks = await asyncio.gather(*tasks)
@@ -239,7 +218,6 @@ async def crawl_parallel(urls: List[str], max_concurrent: int = 10):
         extra_args=["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox"]
     )
     run_conf = get_run_config(with_js=True)
-    
     async with AsyncWebCrawler(config=bc) as crawler:
         results = await crawler.arun_many(
             urls=urls,
@@ -248,7 +226,6 @@ async def crawl_parallel(urls: List[str], max_concurrent: int = 10):
         )
         for r in results:
             if r.success:
-                # Use the filtered fit_markdown if available; otherwise, fall back to raw markdown.
                 md = getattr(r, "fit_markdown", None)
                 if not md:
                     md = r.markdown_v2.raw_markdown
@@ -256,19 +233,16 @@ async def crawl_parallel(urls: List[str], max_concurrent: int = 10):
             else:
                 print(f"Failed crawling {r.url}: {r.error_message}")
 
-# Recursive crawl function to follow internal links.
+# --- Recursive Crawl ---
 async def recursive_crawl(url: str, max_depth: int = 9, current_depth: int = 0, processed: set = None):
     if processed is None:
         processed = set()
     if current_depth > max_depth or url in processed:
         return
     processed.add(url)
-    
     st.session_state.processing_urls.append(url)
     update_progress()
-    
-    await asyncio.sleep(1)  # delay to allow page navigation to settle
-    
+    await asyncio.sleep(1)
     dispatcher = MemoryAdaptiveDispatcher(
         memory_threshold_percent=85.0,
         check_interval=1.0,
@@ -281,7 +255,6 @@ async def recursive_crawl(url: str, max_depth: int = 9, current_depth: int = 0, 
         extra_args=["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox"]
     )
     run_conf = get_run_config(with_js=True)
-    
     async with AsyncWebCrawler(config=bc) as crawler:
         result = await crawler.arun(url=url, config=run_conf)
         if result.success:
@@ -298,7 +271,6 @@ async def recursive_crawl(url: str, max_depth: int = 9, current_depth: int = 0, 
                     await recursive_crawl(href, max_depth, current_depth + 1, processed)
         else:
             print(f"Error crawling {url}: {result.error_message}")
-    
     if url in st.session_state.processing_urls:
         st.session_state.processing_urls.remove(url)
     update_progress()
@@ -371,7 +343,7 @@ async def main():
     # UI widget for concurrency.
     max_concurrent = st.slider("Max concurrent URLs", min_value=1, max_value=50, value=10)
     
-    # Checkbox to decide whether to follow internal links recursively
+    # Checkbox to decide whether to follow internal links recursively.
     follow_links_recursively = st.checkbox("Follow links recursively", value=True)
     
     ic, cc = st.columns([1, 2])
@@ -401,14 +373,12 @@ async def main():
                     fu = format_sitemap_url(url_input)
                     found = get_urls_from_sitemap(fu)
                     if follow_links_recursively:
-                        # If recursive mode is on, use the recursive crawl starting from the first URL.
                         if found:
                             await recursive_crawl(found[0], max_depth=9)
                         else:
                             su = url_input.rstrip("/sitemap.xml")
                             await recursive_crawl(su, max_depth=9)
                     else:
-                        # Otherwise, just crawl the URLs in parallel.
                         if found:
                             await crawl_parallel(found, max_concurrent=max_concurrent)
                         else:
