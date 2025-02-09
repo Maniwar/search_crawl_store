@@ -3,7 +3,6 @@ from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig
 from supabase.client import create_client
 from openai import OpenAI
 import json
-from bs4 import BeautifulSoup
 
 # Initialize clients using secrets
 supabase_url = st.secrets["supabase"]["url"]
