@@ -13,10 +13,7 @@ from pydantic import BaseModel
 os.system('playwright install')
 os.system('playwright install-deps')
 
-try:
-    subprocess.run(["python", "-m", "playwright", "install"], check=True)
-except Exception as e:
-    st.error(f"Playwright installation failed: {e}")
+ 
 
 # ----------------------------------------------------------------
 # SECRETS & CONFIGURATION
