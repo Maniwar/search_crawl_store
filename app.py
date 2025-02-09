@@ -3,7 +3,13 @@ import os
 # Install Playwright browsers and dependencies at runtime.
 os.system('playwright install')
 os.system('playwright install-deps')
- 
+
+import subprocess
+try:
+    subprocess.run(["python", "-m", "playwright", "install"], check=True)
+except Exception as e:
+    print(f"Playwright installation failed: {e}")
+
 import streamlit as st
 import asyncio
 import json
@@ -80,13 +86,20 @@ product_schema = {
 def get_target_urls(query: str) -> dict:
     """
     Generate search URLs for different target sites.
+    The URLs change based on keywords in the query. For example, if the query contains "used",
+    "used" is appended to the search parameters for Facebook Marketplace and eBay.
     Replace these example URLs with your actual target URLs.
     """
-    return {
-        "EcommerceSite": f"https://example-ecommerce.com/search?q={query}",
-        "Facebook Marketplace": f"https://www.facebook.com/marketplace/search/?query={query}",
-        "eBay": f"https://www.ebay.com/sch/i.html?_nkw={query}"
-    }
+    query_encoded = query.replace(" ", "+")
+    urls = {}
+    urls["EcommerceSite"] = f"https://example-ecommerce.com/search?q={query_encoded}"
+    if "used" in query.lower():
+        urls["Facebook Marketplace"] = f"https://www.facebook.com/marketplace/search/?query={query_encoded}+used"
+        urls["eBay"] = f"https://www.ebay.com/sch/i.html?_nkw={query_encoded}+used"
+    else:
+        urls["Facebook Marketplace"] = f"https://www.facebook.com/marketplace/search/?query={query_encoded}"
+        urls["eBay"] = f"https://www.ebay.com/sch/i.html?_nkw={query_encoded}"
+    return urls
 
 # --------------------------------------------------
 # Asynchronous Scraping Functions Using CSS Extraction
@@ -253,10 +266,7 @@ if st.button("Search & Store Products"):
         else:
             response_message = "Sorry, I couldn't find any products matching your query."
         st.session_state.conversation.append({"sender": "assistant", "message": response_message})
-        if hasattr(st, "experimental_rerun"):
-            st.experimental_rerun()
-        else:
-            st.info("Please refresh the page to see the updated conversation.")
+        st.experimental_rerun()
     else:
         st.warning("Please enter a product query.")
 
@@ -269,10 +279,7 @@ if st.button("Ask Agent"):
         with st.spinner("Letting the agent analyze stored products..."):
             answer = agent_answer(agent_query)
         st.session_state.conversation.append({"sender": "assistant", "message": answer})
-        if hasattr(st, "experimental_rerun"):
-            st.experimental_rerun()
-        else:
-            st.info("Please refresh the page to see the updated conversation.")
+        st.experimental_rerun()
     else:
         st.warning("Please enter an agent query.")
 
@@ -295,7 +302,7 @@ st.sidebar.markdown(
     """
     **Scraping & Storing Products:**
     1. Enter a product query (e.g., "used iPhone", "budget laptop") and click "Search & Store Products".
-    2. The app scrapes multiple sites (using example URLs), extracts product details, and stores them in Supabase using a dynamic schema.
+    2. The app scrapes multiple sites (using dynamic URLs based on your query), extracts product details, and stores them in Supabase using a dynamic schema.
     
     **Agent Query:**
     1. After products are stored, enter an agent query (e.g., "What is the best product and why?").
