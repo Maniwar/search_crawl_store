@@ -1,0 +1,6 @@
+streamlit
+crawl4u
+supabase
+requests
+openai
+json
