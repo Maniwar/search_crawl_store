@@ -1,4 +1,3 @@
-# Verified working packages for Playwright+Chromium
 libnss3
 libnspr4
 libatk1.0-0
@@ -20,14 +19,5 @@ libxcursor1
 libgtk-3-0
 libpangocairo-1.0-0
 libcairo-gobject2
-libgdk-pixbuf2.0-0
+libgdk-pixbuf-2.0-0
 libx11-xcb1
-libxslt1.1
-libwebpdemux2
-libharfbuzz-icu0
-libenchant-2-2
-libhyphen0
-libevent-2.1-7
-libopus0
-libvpx6
-libsnappy1v5
