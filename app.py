@@ -272,7 +272,7 @@ if st.button("Search & Store Products"):
         else:
             response_message = "Sorry, I couldn't find any products matching your query."
         st.session_state.conversation.append({"sender": "assistant", "message": response_message})
-        st.experimental_rerun()
+        st.rerun()
     else:
         st.warning("Please enter a product query.")
 
@@ -285,7 +285,7 @@ if st.button("Ask Agent"):
         with st.spinner("Letting the agent analyze stored products..."):
             answer = agent_answer(agent_query)
         st.session_state.conversation.append({"sender": "assistant", "message": answer})
-        st.experimental_rerun()
+        st.rerun()
     else:
         st.warning("Please enter an agent query.")
 
