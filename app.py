@@ -27,7 +27,10 @@ from crawl4ai import (
 )
 from crawl4ai.async_dispatcher import MemoryAdaptiveDispatcher
 
-# Using default markdown conversion (full raw_markdown)
+# Imports for markdown generation and content filtering using LLMContentFilter
+from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
+from crawl4ai.content_filter_strategy import LLMContentFilter
+
 load_dotenv()
 
 # Environment variables and client setup
@@ -101,7 +104,6 @@ def get_urls_from_sitemap(u: str) -> List[str]:
         r.raise_for_status()
         ro = ElementTree.fromstring(r.content)
         ns = {"ns": "http://www.sitemaps.org/schemas/sitemap/0.9"}
-        # Use .strip() on each URL so that no trailing whitespace (or characters) are removed accidentally.
         return [loc.text.strip() for loc in ro.findall(".//ns:loc", ns)]
     except Exception as e:
         print(f"Sitemap error: {e}")
@@ -119,7 +121,19 @@ def format_sitemap_url(u: str) -> str:
     return u
 
 def get_run_config(with_js: bool = False) -> CrawlerRunConfig:
-    # Return default run configuration to get full raw markdown.
+    # Use LLMContentFilter to extract core content as fit_markdown.
+    llm_filter = LLMContentFilter(
+        provider="openai/gpt-4o",
+        api_token=os.getenv("OPENAI_API_KEY"),
+        chunk_token_threshold=4096,
+        instruction="""
+        Extract the main content of this page.
+        Remove navigation menus, ads, sidebars, footers, cookie notices, and non-essential UI elements.
+        Return clean markdown with proper headers and code blocks.
+        """,
+        verbose=True
+    )
+    md_generator = DefaultMarkdownGenerator(content_filter=llm_filter)
     kwargs = {
         "cache_mode": CacheMode.BYPASS,
         "stream": False,
@@ -127,7 +141,8 @@ def get_run_config(with_js: bool = False) -> CrawlerRunConfig:
         "wait_for_images": True,
         "delay_before_return_html": 1.0,
         "excluded_tags": ["header", "footer", "nav", "aside"],
-        "word_count_threshold": 50
+        "word_count_threshold": 50,
+        "markdown_generator": md_generator
     }
     if with_js:
         kwargs["js_code"] = [js_click_all]
@@ -356,18 +371,21 @@ async def main():
                 with st.spinner("Crawling & Processing..."):
                     fu = format_sitemap_url(url_input)
                     found = get_urls_from_sitemap(fu)
-                    if follow_links_recursively:
-                        if found:
+                    # When no sitemap is found, remove the literal "/sitemap.xml" suffix if present.
+                    if not found:
+                        if url_input.endswith("/sitemap.xml"):
+                            su = url_input[:-len("/sitemap.xml")]
+                        else:
+                            su = url_input
+                        if follow_links_recursively:
+                            await recursive_crawl(su, max_depth=9)
+                        else:
+                            await crawl_parallel([su], max_concurrent=max_concurrent)
+                    else:
+                        if follow_links_recursively:
                             await recursive_crawl(found[0], max_depth=9)
                         else:
-                            su = url_input.rstrip("/sitemap.xml")
-                            await recursive_crawl(su, max_depth=9)
-                    else:
-                        if found:
                             await crawl_parallel(found, max_concurrent=max_concurrent)
-                        else:
-                            su = url_input.rstrip("/sitemap.xml")
-                            await crawl_parallel([su], max_concurrent=max_concurrent)
                 st.session_state.urls_processed.add(url_input)
                 st.session_state.processing_complete = True
                 st.session_state.is_processing = False
