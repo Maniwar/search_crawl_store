@@ -165,12 +165,7 @@ def get_urls_from_sitemap(u: str) -> List[str]:
 
 async def crawl_parallel(urls: List[str], mc: int = 5):
     bc = BrowserConfig(headless=True, verbose=False, extra_args=["--disable-gpu","--disable-dev-shm-usage","--no-sandbox"])
-    cc = CrawlerRunConfig(
-        cache_mode=CacheMode.BYPASS,
-        follow_links=True,
-        max_depth=2,
-        domain_restrict=True
-    )
+    cc = CrawlerRunConfig(cache_mode=CacheMode.BYPASS)
     c = AsyncWebCrawler(config=bc)
     await c.start()
     try:
