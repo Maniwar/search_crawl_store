@@ -48,14 +48,13 @@ from crawl4ai import AsyncWebCrawler, CrawlerRunConfig, CacheMode, BrowserConfig
 from crawl4ai.extraction_strategy import JsonCssExtractionStrategy
 
 # --------------------------------------------------
-# OpenAI Client Initialization for Agent
+# OpenAI Client Initialization for Agent (New Interface)
 # --------------------------------------------------
-# Using the new interface as per your snippet:
 from openai import OpenAI
 client = OpenAI(api_key=OPENAI_API_KEY)
-# Optionally, you can test the client here:
+# Optionally, test the client:
 try:
-    test_models = client.models.list()
+    _ = client.models.list()
     st.write("OpenAI client initialized successfully.")
 except Exception as e:
     st.error(f"Error initializing OpenAI client: {e}")
@@ -92,8 +91,8 @@ product_schema = {
 def get_target_urls(query: str) -> dict:
     """
     Generate search URLs for different target sites.
-    Dynamically adjust the URLs based on the query.
-    For example, if "used" is in the query, append "used" to the search parameters.
+    Dynamically adjust the URLs based on the query. For example, if "used" is in the query,
+    append "used" to the search parameters for Facebook Marketplace and eBay.
     Replace these example URLs with your actual target URLs.
     """
     query_encoded = query.replace(" ", "+")
