@@ -132,15 +132,19 @@ def same_domain(url1: str, url2: str) -> bool:
     return urlparse(url1).netloc == urlparse(url2).netloc
 
 def format_sitemap_url(u: str) -> str:
-    u = u.rstrip("/")
-    if not u.endswith("sitemap.xml"):
-        u = f"{u}/sitemap.xml"
-    if not u.startswith(("http://", "https://")):
-        u = f"https://{u}"
+    """
+    If the URL already contains 'sitemap.xml', returns it unchanged;
+    otherwise, if it's a domain-level URL, appends '/sitemap.xml'. For page URLs, returns as-is.
+    """
+    if "sitemap.xml" in u:
+        return u
+    parsed = urlparse(u)
+    if parsed.path in ("", "/"):
+        return f"{u.rstrip('/')}/sitemap.xml"
     return u
 
 def get_run_config(with_js: bool = False) -> CrawlerRunConfig:
-    # We no longer use LLMContentFilter—store the full raw markdown.
+    # Use default conversion to get full raw markdown.
     kwargs = {
         "cache_mode": CacheMode.BYPASS,
         "stream": False,
@@ -195,7 +199,7 @@ async def process_and_store_document(url: str, md: str):
     insert_tasks = [insert_chunk_to_supabase(item) for item in processed_chunks]
     await asyncio.gather(*insert_tasks)
 
-# --- UI Progress Widget (in Sidebar) ---
+# --- UI Progress Widget (Sidebar) ---
 def init_progress_state():
     if "processing_urls" not in st.session_state:
         st.session_state.processing_urls = []
@@ -240,7 +244,7 @@ async def crawl_parallel(urls: List[str], max_concurrent: int = 10):
             else:
                 print(f"Failed crawling {r.url}: {r.error_message}")
 
-# --- Recursive Crawl (Parallelized) ---
+# --- Recursive Crawl (Parallelized with concurrency limit) ---
 async def recursive_crawl(url: str, max_depth: int = 9, current_depth: int = 0, processed: set = None):
     if processed is None:
         processed = set()
@@ -325,7 +329,7 @@ async def main():
     if "processing_urls" not in st.session_state:
         st.session_state.processing_urls = []
     
-    # Create sidebar progress widget
+    # Create sidebar progress widget.
     st.session_state.progress_placeholder = st.sidebar.empty()
     update_progress()
     
@@ -359,7 +363,15 @@ async def main():
         st.write("Enter a website URL to process.")
         url_input = st.text_input("Website URL", key="url_input", placeholder="example.com or https://example.com")
         if url_input:
-            pv = format_sitemap_url(url_input)
+            # If the URL contains 'sitemap.xml', use it; otherwise, generate if it's a domain URL.
+            if "sitemap.xml" in url_input:
+                pv = url_input
+            else:
+                parsed = urlparse(url_input)
+                if parsed.path in ("", "/"):
+                    pv = f"{url_input.rstrip('/')}/sitemap.xml"
+                else:
+                    pv = url_input
             st.caption(f"Will try: {pv}")
         c1, c2 = st.columns(2)
         with c1:
@@ -377,20 +389,17 @@ async def main():
             if url_input not in st.session_state.urls_processed:
                 st.session_state.is_processing = True
                 with st.spinner("Crawling & Processing..."):
-                    fu = format_sitemap_url(url_input)
-                    found = get_urls_from_sitemap(fu)
-                    if follow_links_recursively:
-                        if found:
-                            await recursive_crawl(found[0], max_depth=9)
-                        else:
-                            su = url_input[:-len("/sitemap.xml")] if url_input.endswith("/sitemap.xml") else url_input
-                            await recursive_crawl(su, max_depth=9)
+                    if "sitemap.xml" in url_input:
+                        found = get_urls_from_sitemap(url_input)
                     else:
-                        if found:
-                            await crawl_parallel(found, max_concurrent=max_concurrent)
-                        else:
-                            su = url_input[:-len("/sitemap.xml")] if url_input.endswith("/sitemap.xml") else url_input
-                            await crawl_parallel([su], max_concurrent=max_concurrent)
+                        fu = format_sitemap_url(url_input)
+                        found = get_urls_from_sitemap(fu)
+                        if not found:
+                            found = [url_input]
+                    if follow_links_recursively:
+                        await recursive_crawl(found[0], max_depth=9)
+                    else:
+                        await crawl_parallel(found, max_concurrent=max_concurrent)
                 st.session_state.urls_processed.add(url_input)
                 st.session_state.processing_complete = True
                 st.session_state.is_processing = False
@@ -414,12 +423,12 @@ async def main():
             for m in st.session_state.messages:
                 role = "user" if m.get("role") == "user" else "assistant"
                 with st.chat_message(role):
-                    st.markdown(m["content"])
+                    st.markdown(m["content"], unsafe_allow_html=True)
             user_query = st.chat_input("Ask a question about the processed content...")
             if user_query:
                 st.session_state.messages.append({"role": "user", "content": user_query})
                 with st.chat_message("user"):
-                    st.markdown(user_query)
+                    st.markdown(user_query, unsafe_allow_html=True)
                 dr = retrieve_relevant_documentation(user_query)
                 sys = "You have access to the following context:\n" + dr + "\nAnswer the question."
                 msgs = [
@@ -434,13 +443,13 @@ async def main():
                     a = r.choices[0].message.content
                     st.session_state.messages.append({"role": "assistant", "content": a})
                     with st.chat_message("assistant"):
-                        st.markdown(a)
+                        st.markdown(a, unsafe_allow_html=True)
                         with st.expander("References"):
-                            st.markdown(dr)
+                            st.markdown(dr, unsafe_allow_html=True)
                 except Exception as e:
                     st.session_state.messages.append({"role": "assistant", "content": f"Error: {e}"})
                     with st.chat_message("assistant"):
-                        st.markdown(f"Error: {e}")
+                        st.markdown(f"Error: {e}", unsafe_allow_html=True)
             if st.button("Clear Chat History", type="secondary"):
                 st.session_state.messages = []
                 st.rerun()
