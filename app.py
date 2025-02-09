@@ -132,11 +132,11 @@ js_click_all = """
 """
 
 def get_run_config(with_js: bool = False) -> CrawlerRunConfig:
-    # Create a PruningContentFilter with a dynamic threshold and a minimum word count.
+    # Create a PruningContentFilter with higher threshold and minimum word count
     prune_filter = PruningContentFilter(
-        threshold=0.5,
+        threshold=0.7,           # Increase threshold to prune more irrelevant content
         threshold_type="dynamic",
-        min_word_threshold=10
+        min_word_threshold=20    # Only keep blocks with at least 20 words
     )
     md_generator = DefaultMarkdownGenerator(content_filter=prune_filter)
     kwargs = {
@@ -145,6 +145,8 @@ def get_run_config(with_js: bool = False) -> CrawlerRunConfig:
         "exclude_external_links": False,
         "wait_for_images": True,
         "delay_before_return_html": 1.0,
+        "excluded_tags": ["header", "footer", "nav", "aside"],
+        "word_count_threshold": 50,
         "markdown_generator": md_generator
     }
     if with_js:
@@ -240,7 +242,7 @@ async def crawl_parallel(urls: List[str], max_concurrent: int = 10):
         )
         for r in results:
             if r.success:
-                # Prefer the filtered fit_markdown output.
+                # Use the filtered fit_markdown if available.
                 md = getattr(r, "fit_markdown", None)
                 if not md:
                     md = r.markdown_v2.raw_markdown
