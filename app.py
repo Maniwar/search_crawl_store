@@ -55,9 +55,9 @@ js_click_all = """
 
 # --- Helper Functions ---
 
-def chunk_text(text: str, max_chars: int = 5000) -> List[str]:
-    """Splits text into chunks by paragraphs (fast and efficient)."""
-    paragraphs = text.split("\n\n")
+def chunk_text(t: str, max_chars: int = 5000) -> List[str]:
+    """Splits text into chunks by paragraphs for efficiency."""
+    paragraphs = t.split("\n\n")
     chunks = []
     current_chunk = ""
     for para in paragraphs:
@@ -82,31 +82,32 @@ async def get_embedding(text: str) -> List[float]:
         print(f"Embedding error: {e}")
         return [0.0] * 1536
 
-def extract_relevant_snippet(content: str, query: str) -> str:
+def extract_reference_snippet(content: str, query: str, snippet_length: int = 300) -> str:
     """
-    Splits the content into paragraphs, scores each by the count
-    of query-term occurrences (case-insensitive), selects the best match,
-    and highlights the query terms using <mark> tags.
+    Finds the first occurrence of any query term in the content and returns a substring
+    around that point with the query terms highlighted.
     """
-    paragraphs = content.split("\n\n")
-    best_score = 0
-    best_para = paragraphs[0] if paragraphs else content
     query_terms = query.split()
-    for para in paragraphs:
-        score = sum(len(re.findall(re.escape(term), para, flags=re.IGNORECASE)) for term in query_terms)
-        if score > best_score:
-            best_score = score
-            best_para = para
-    # Highlight terms
+    first_index = None
     for term in query_terms:
-        best_para = re.sub(f"({re.escape(term)})", r"<mark>\1</mark>", best_para, flags=re.IGNORECASE)
-    return best_para
+        match = re.search(re.escape(term), content, flags=re.IGNORECASE)
+        if match:
+            if first_index is None or match.start() < first_index:
+                first_index = match.start()
+    if first_index is not None:
+        start = max(0, first_index - snippet_length // 2)
+        snippet = content[start:start + snippet_length]
+    else:
+        snippet = content[:snippet_length]
+    # Highlight query terms in the snippet.
+    for term in query_terms:
+        snippet = re.sub(f"({re.escape(term)})", r"<mark>\1</mark>", snippet, flags=re.IGNORECASE)
+    return snippet
 
 def retrieve_relevant_documentation(query: str) -> str:
     """
-    Retrieves the best-matching document from Supabase
-    and returns a snippet (the best paragraph with highlighted query terms)
-    along with its title and source.
+    Retrieves the best-matching document from Supabase, extracts a snippet
+    focused on the query terms, and returns a formatted reference block.
     """
     e = asyncio.run(get_embedding(query))
     r = supabase.rpc("match_documents", {"query_embedding": e, "match_count": 5}).execute()
@@ -114,7 +115,7 @@ def retrieve_relevant_documentation(query: str) -> str:
     if not d:
         return "No relevant documentation found."
     best = max(d, key=lambda x: x.get("similarity", 0))
-    snippet = extract_relevant_snippet(best["content"], query)
+    snippet = extract_reference_snippet(best["content"], query)
     return f"\n# {best['title']}\n\n{snippet}\n...\nSource: {best['url']}\nSimilarity: {best['similarity']:.3f}\n"
 
 def get_urls_from_sitemap(u: str) -> List[str]:
@@ -140,7 +141,7 @@ def format_sitemap_url(u: str) -> str:
     return u
 
 def get_run_config(with_js: bool = False) -> CrawlerRunConfig:
-    # We want the full raw markdown conversion.
+    # Use default conversion to get full raw markdown.
     kwargs = {
         "cache_mode": CacheMode.BYPASS,
         "stream": False,
@@ -242,7 +243,7 @@ async def crawl_parallel(urls: List[str], max_concurrent: int = 10):
             else:
                 print(f"Failed crawling {r.url}: {r.error_message}")
 
-# --- Recursive Crawl ---
+# --- Recursive Crawl (Parallelized) ---
 async def recursive_crawl(url: str, max_depth: int = 9, current_depth: int = 0, processed: set = None):
     if processed is None:
         processed = set()
@@ -272,11 +273,14 @@ async def recursive_crawl(url: str, max_depth: int = 9, current_depth: int = 0, 
             await process_and_store_document(url, md)
             links_dict = getattr(result, "links", {})
             internal_links = links_dict.get("internal", [])
+            tasks = []
             for link in internal_links:
                 href = link.get("href")
                 absolute_url = urljoin(url, href) if href else None
                 if absolute_url and same_domain(absolute_url, url) and absolute_url not in processed:
-                    await recursive_crawl(absolute_url, max_depth, current_depth + 1, processed)
+                    tasks.append(recursive_crawl(absolute_url, max_depth, current_depth + 1, processed))
+            if tasks:
+                await asyncio.gather(*tasks)
         else:
             print(f"Error crawling {url}: {result.error_message}")
     if url in st.session_state.processing_urls:
