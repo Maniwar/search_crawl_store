@@ -9,13 +9,13 @@ import requests
 import streamlit as st
 from datetime import datetime, timezone
 from typing import List, Dict, Any
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 from xml.etree import ElementTree
 from dotenv import load_dotenv
 from supabase import create_client, Client
 from openai import AsyncOpenAI
 
-# Crawl4AI imports
+# Advanced imports for Crawl4AI, dispatchers, and rate limiting
 from crawl4ai import (
     AsyncWebCrawler,
     BrowserConfig,
@@ -27,9 +27,9 @@ from crawl4ai import (
 )
 from crawl4ai.async_dispatcher import MemoryAdaptiveDispatcher
 
-# For faster markdown conversion, use a PruningContentFilter
+# Imports for markdown generation and content filtering using LLMContentFilter
 from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
-from crawl4ai.content_filter_strategy import PruningContentFilter
+from crawl4ai.content_filter_strategy import LLMContentFilter
 
 load_dotenv()
 
@@ -38,14 +38,29 @@ SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY or not OPENAI_API_KEY:
-    raise ValueError("Set SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, and OPENAI_API_KEY in your environment.")
+    raise ValueError("Please set SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, and OPENAI_API_KEY in your environment.")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
-# --- Optimized Chunking (paragraph-based) ---
-def chunk_text(text: str, max_chars: int = 5000) -> List[str]:
-    paragraphs = text.split("\n\n")
+# --- Define JS snippet (if needed) ---
+js_click_all = """
+(async () => {
+    const clickable = document.querySelectorAll("a, button");
+    for (let el of clickable) {
+        try {
+            el.click();
+            await new Promise(r => setTimeout(r, 300));
+        } catch(e) {}
+    }
+})();
+"""
+
+# --- Helper Functions ---
+
+def chunk_text(t: str, max_chars: int = 5000) -> List[str]:
+    """Splits text into chunks by paragraphs for efficiency."""
+    paragraphs = t.split("\n\n")
     chunks = []
     current_chunk = ""
     for para in paragraphs:
@@ -59,7 +74,6 @@ def chunk_text(text: str, max_chars: int = 5000) -> List[str]:
         chunks.append(current_chunk.strip())
     return chunks
 
-# --- Embedding and Storage ---
 async def get_embedding(text: str) -> List[float]:
     try:
         r = await openai_client.embeddings.create(
@@ -84,7 +98,6 @@ def retrieve_relevant_documentation(query: str) -> str:
         )
     return "\n\n---\n\n".join(parts)
 
-# --- URL Helpers ---
 def get_urls_from_sitemap(u: str) -> List[str]:
     try:
         r = requests.get(u)
@@ -107,14 +120,20 @@ def format_sitemap_url(u: str) -> str:
         u = f"https://{u}"
     return u
 
-# --- Run Configuration using PruningContentFilter (fast) ---
 def get_run_config(with_js: bool = False) -> CrawlerRunConfig:
-    prune_filter = PruningContentFilter(
-        threshold=0.5,
-        threshold_type="dynamic",
-        min_word_threshold=10
+    # Use LLMContentFilter to extract core content as fit_markdown.
+    llm_filter = LLMContentFilter(
+        provider="openai/gpt-4o",
+        api_token=os.getenv("OPENAI_API_KEY"),
+        chunk_token_threshold=4096,
+        instruction="""
+        Extract the main content of this page.
+        Remove navigation menus, ads, sidebars, footers, cookie notices, and non-essential UI elements.
+        Return clean markdown with proper headers and code blocks.
+        """,
+        verbose=True
     )
-    md_generator = DefaultMarkdownGenerator(content_filter=prune_filter)
+    md_generator = DefaultMarkdownGenerator(content_filter=llm_filter)
     kwargs = {
         "cache_mode": CacheMode.BYPASS,
         "stream": False,
@@ -125,8 +144,8 @@ def get_run_config(with_js: bool = False) -> CrawlerRunConfig:
         "word_count_threshold": 50,
         "markdown_generator": md_generator
     }
-    # Optionally, you can add JS if necessary (remove if not needed)
-    # kwargs["js_code"] = [js_click_all]
+    if with_js:
+        kwargs["js_code"] = [js_click_all]
     return CrawlerRunConfig(**kwargs)
 
 def extract_title_and_summary_from_markdown(md: str) -> Dict[str, str]:
@@ -253,8 +272,10 @@ async def recursive_crawl(url: str, max_depth: int = 9, current_depth: int = 0, 
             internal_links = links_dict.get("internal", [])
             for link in internal_links:
                 href = link.get("href")
-                if href and same_domain(href, url) and href not in processed:
-                    await recursive_crawl(href, max_depth, current_depth + 1, processed)
+                # Convert relative URLs to absolute using urljoin.
+                absolute_url = urljoin(url, href) if href else None
+                if absolute_url and same_domain(absolute_url, url) and absolute_url not in processed:
+                    await recursive_crawl(absolute_url, max_depth, current_depth + 1, processed)
         else:
             print(f"Error crawling {url}: {result.error_message}")
     if url in st.session_state.processing_urls:
