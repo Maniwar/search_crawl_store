@@ -93,18 +93,18 @@ js_click_all = """
 })();
 """
 
-# Run config: note that we now set exclude_external_links to False so we can get all links.
+# Run configuration: here we do not exclude external links so we get them, and later filter them.
 def get_run_config(with_js: bool = False) -> CrawlerRunConfig:
     kwargs = {
         "cache_mode": CacheMode.BYPASS,
         "stream": False,
-        "exclude_external_links": False  # Do not exclude external links; we will filter later.
+        "exclude_external_links": False
     }
     if with_js:
         kwargs["js_code"] = [js_click_all]
     return CrawlerRunConfig(**kwargs)
 
-# Recursive crawl function to follow all internal links
+# Recursive crawl function: it now uses the passed-in URL for storage.
 async def recursive_crawl(url: str, max_depth: int = 9, current_depth: int = 0, processed: set = None):
     if processed is None:
         processed = set()
@@ -123,20 +123,20 @@ async def recursive_crawl(url: str, max_depth: int = 9, current_depth: int = 0, 
         verbose=False,
         extra_args=["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox"]
     )
-    # Use JS clicking if needed
     run_conf = get_run_config(with_js=True)
     
     async with AsyncWebCrawler(config=bc) as crawler:
         result = await crawler.arun(url=url, config=run_conf)
         if result.success:
+            # Use the input URL (not result.url) to store each page's content.
             print(f"Crawled: {url} (depth {current_depth})")
-            await process_and_store_document(result.url, result.markdown_v2.raw_markdown)
-            # Extract internal links from the result's links dictionary.
+            await process_and_store_document(url, result.markdown_v2.raw_markdown)
+            # Get internal links from the result's links dictionary.
             links_dict = getattr(result, "links", {})
             internal_links = links_dict.get("internal", [])
             for link in internal_links:
                 href = link.get("href")
-                if href and href not in processed:
+                if href and same_domain(href, url) and href not in processed:
                     await recursive_crawl(href, max_depth, current_depth + 1, processed)
         else:
             print(f"Error crawling {url}: {result.error_message}")
@@ -175,7 +175,32 @@ async def process_and_store_document(url: str, md: str):
     insert_tasks = [insert_chunk_to_supabase(item) for item in processed_chunks]
     await asyncio.gather(*insert_tasks)
 
-# Streamlit UI and main function remain largely unchanged.
+def delete_all_chunks():
+    supabase.table("rag_chunks").delete().neq("id", "").execute()
+
+def get_db_stats():
+    try:
+        r = supabase.table("rag_chunks").select("id, url, metadata").execute()
+        d = r.data
+        if not d:
+            return {"urls": [], "domains": [], "doc_count": 0, "last_updated": None}
+        urls = set(x["url"] for x in d)
+        domains = set(x["metadata"].get("source", "") for x in d)
+        count = len(d)
+        lt = [x["metadata"].get("crawled_at", None) for x in d if x["metadata"].get("crawled_at")]
+        if not lt:
+            return {"urls": list(urls), "domains": list(domains), "doc_count": count, "last_updated": None}
+        mx = max(lt)
+        dt = datetime.fromisoformat(mx.replace("Z", "+00:00"))
+        tz = datetime.now().astimezone().tzinfo
+        dt = dt.astimezone(tz)
+        last_updated = dt.strftime("%Y-%m-%d %H:%M:%S %Z")
+        return {"urls": list(urls), "domains": list(domains), "doc_count": count, "last_updated": last_updated}
+    except Exception as e:
+        print(f"DB Stats error: {e}")
+        return None
+
+# Main Streamlit app
 async def main():
     st.set_page_config(page_title="Dynamic RAG Chat System (Supabase)", page_icon="🤖", layout="wide")
     if "messages" not in st.session_state:
@@ -189,8 +214,27 @@ async def main():
     if "suggested_questions" not in st.session_state:
         st.session_state.suggested_questions = None
     st.title("Dynamic RAG Chat System (Supabase)")
-    
-    # (Database stats and display code omitted for brevity)
+
+    db_stats = get_db_stats()
+    if db_stats and db_stats["doc_count"] > 0:
+        st.session_state.processing_complete = True
+        st.session_state.urls_processed = set(db_stats["urls"])
+
+    if db_stats and db_stats["doc_count"] > 0:
+        st.success("💡 System is ready with existing knowledge base (Supabase)!")
+        with st.expander("Knowledge Base Information", expanded=True):
+            st.markdown(f"""
+### Current Knowledge Base Stats:
+- **Documents**: {db_stats['doc_count']}
+- **Sources**: {len(db_stats['domains'])}
+- **Last updated**: {db_stats['last_updated']}
+
+### Sources include:
+{', '.join(db_stats['domains'])}
+""")
+    else:
+        st.info("👋 Welcome! Start by adding a website to create your knowledge base.")
+
     ic, cc = st.columns([1, 2])
     with ic:
         st.subheader("Add Content to RAG System")
@@ -204,7 +248,7 @@ async def main():
             pb = st.button("Process URL", disabled=st.session_state.is_processing)
         with c2:
             if st.button("Clear Database", disabled=st.session_state.is_processing):
-                # delete_all_chunks() function should be called here if defined.
+                delete_all_chunks()
                 st.session_state.processing_complete = False
                 st.session_state.urls_processed = set()
                 st.session_state.messages = []
@@ -218,8 +262,9 @@ async def main():
                     fu = format_sitemap_url(url_input)
                     found = get_urls_from_sitemap(fu)
                     if found:
-                        # Start recursive crawling using the first URL from the sitemap.
-                        await recursive_crawl(found[0], max_depth=9)
+                        # Crawl every URL from the sitemap.
+                        for link in found:
+                            await recursive_crawl(link, max_depth=9)
                     else:
                         su = url_input.rstrip("/sitemap.xml")
                         await recursive_crawl(su, max_depth=9)
@@ -279,7 +324,10 @@ async def main():
         else:
             st.info("Please process a URL first to start chatting!")
     st.markdown("---")
-    st.markdown("System Status: ...")
+    if db_stats and db_stats["doc_count"] > 0:
+        st.markdown(f"System Status: 🟢 Ready with {db_stats['doc_count']} documents from {len(db_stats['domains'])} sources")
+    else:
+        st.markdown("System Status: 🟡 Waiting for content")
 
 if __name__ == "__main__":
     asyncio.run(main())
