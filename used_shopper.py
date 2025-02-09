@@ -298,4 +298,3 @@ def run_similarity_search():
     st.warning("No listings have been found in the current session to perform similarity search. Please initiate a search first.")
 
 run_similarity_search()
->>>>>>> REPLACE
