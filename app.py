@@ -55,9 +55,9 @@ js_click_all = """
 
 # --- Helper Functions ---
 
-def chunk_text(t: str, max_chars: int = 5000) -> List[str]:
+def chunk_text(text: str, max_chars: int = 5000) -> List[str]:
     """Splits text into chunks by paragraphs for efficiency."""
-    paragraphs = t.split("\n\n")
+    paragraphs = text.split("\n\n")
     chunks = []
     current_chunk = ""
     for para in paragraphs:
@@ -85,7 +85,7 @@ async def get_embedding(text: str) -> List[float]:
 def extract_reference_snippet(content: str, query: str, snippet_length: int = 300) -> str:
     """
     Finds the first occurrence of any query term in the content and returns a substring
-    around that point with the query terms highlighted.
+    around that point with the query terms highlighted using <mark> tags.
     """
     query_terms = query.split()
     first_index = None
@@ -99,7 +99,6 @@ def extract_reference_snippet(content: str, query: str, snippet_length: int = 30
         snippet = content[start:start + snippet_length]
     else:
         snippet = content[:snippet_length]
-    # Highlight query terms in the snippet.
     for term in query_terms:
         snippet = re.sub(f"({re.escape(term)})", r"<mark>\1</mark>", snippet, flags=re.IGNORECASE)
     return snippet
@@ -141,7 +140,7 @@ def format_sitemap_url(u: str) -> str:
     return u
 
 def get_run_config(with_js: bool = False) -> CrawlerRunConfig:
-    # Use default conversion to get full raw markdown.
+    # We no longer use LLMContentFilter—store the full raw markdown.
     kwargs = {
         "cache_mode": CacheMode.BYPASS,
         "stream": False,
@@ -196,16 +195,14 @@ async def process_and_store_document(url: str, md: str):
     insert_tasks = [insert_chunk_to_supabase(item) for item in processed_chunks]
     await asyncio.gather(*insert_tasks)
 
-# --- UI Progress Widget ---
+# --- UI Progress Widget (in Sidebar) ---
 def init_progress_state():
     if "processing_urls" not in st.session_state:
         st.session_state.processing_urls = []
 
 def update_progress():
-    progress_placeholder = st.session_state.get("progress_placeholder")
-    if progress_placeholder is not None:
-        progress_placeholder.markdown("### Currently Processing URLs:\n" +
-                                      "\n".join(f"- {url}" for url in st.session_state.processing_urls))
+    st.sidebar.markdown("### Currently Processing URLs:\n" +
+                        "\n".join(f"- {url}" for url in st.session_state.processing_urls))
 
 # --- Advanced Parallel Crawling ---
 async def crawl_parallel(urls: List[str], max_concurrent: int = 10):
@@ -328,7 +325,8 @@ async def main():
     if "processing_urls" not in st.session_state:
         st.session_state.processing_urls = []
     
-    st.session_state.progress_placeholder = st.empty()
+    # Create sidebar progress widget
+    st.session_state.progress_placeholder = st.sidebar.empty()
     update_progress()
     
     st.title("Dynamic RAG Chat System (Supabase)")
