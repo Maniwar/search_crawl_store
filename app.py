@@ -39,7 +39,7 @@ if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY or not OPENAI_API_KEY:
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
-# --- Helper Functions (unchanged except for progress updates) ---
+# --- Helper Functions ---
 
 def chunk_text(t: str, c: int = 5000) -> List[str]:
     r = []
@@ -139,38 +139,29 @@ def get_run_config(with_js: bool = False) -> CrawlerRunConfig:
         kwargs["js_code"] = [js_click_all]
     return CrawlerRunConfig(**kwargs)
 
-async def get_title_and_summary(chunk: str, url: str) -> Dict[str, str]:
-    sp = ("You are an AI that extracts titles and summaries from web content chunks.\n"
-          "Return a JSON object with 'title' and 'summary' keys.")
-    uc = f"URL: {url}\n\nContent (first 1000 chars):\n{chunk[:1000]}..."
-    try:
-        r = await openai_client.chat.completions.create(
-            model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
-            messages=[
-                {"role": "system", "content": sp},
-                {"role": "user", "content": uc},
-            ],
-            temperature=0.7,
-            max_tokens=2000,
-        )
-        w = r.choices[0].message.content.strip()
-        if w.startswith("{"):
-            return json.loads(w)
-        else:
-            return {"title": "Untitled", "summary": w[:200]}
-    except Exception as e:
-        print(f"Title/Summary error: {e}")
-        return {"title": "Untitled", "summary": ""}
+def extract_title_and_summary_from_markdown(md: str) -> Dict[str, str]:
+    """
+    Extracts a title and summary from markdown.
+    Uses the first header line (starting with '#') as title,
+    and the entire markdown as the summary.
+    """
+    lines = md.splitlines()
+    title = "Untitled"
+    for line in lines:
+        if line.strip().startswith("#"):
+            title = line.lstrip("# ").strip()
+            break
+    return {"title": title, "summary": md}
 
 async def process_chunk(chunk: str, num: int, url: str) -> Dict[str, Any]:
-    a = await get_title_and_summary(chunk, url)
-    e = await get_embedding(chunk)
+    ts = extract_title_and_summary_from_markdown(chunk)
+    embedding = await get_embedding(ts["summary"])
     return {
         "id": f"{url}_{num}",
         "url": url,
         "chunk_number": num,
-        "title": a["title"],
-        "summary": a["summary"],
+        "title": ts["title"],
+        "summary": ts["summary"],
         "content": chunk,
         "metadata": {
             "source": urlparse(url).netloc,
@@ -178,7 +169,7 @@ async def process_chunk(chunk: str, num: int, url: str) -> Dict[str, Any]:
             "crawled_at": datetime.now(timezone.utc).isoformat(),
             "url_path": urlparse(url).path,
         },
-        "embedding": e,
+        "embedding": embedding,
     }
 
 async def insert_chunk_to_supabase(d: Dict[str, Any]):
@@ -194,19 +185,16 @@ async def process_and_store_document(url: str, md: str):
     insert_tasks = [insert_chunk_to_supabase(item) for item in processed_chunks]
     await asyncio.gather(*insert_tasks)
 
-# --- New: UI Progress Widget ---
-# We'll maintain a list in st.session_state.processing_urls.
-# And update a placeholder "progress_placeholder" to show which URLs are currently being processed.
+# --- UI Progress Widget ---
 def init_progress_state():
     if "processing_urls" not in st.session_state:
         st.session_state.processing_urls = []
 
 def update_progress():
-    # This function updates the progress UI widget.
     progress_placeholder = st.session_state.get("progress_placeholder")
     if progress_placeholder is not None:
-        progress_placeholder.markdown("### Currently Processing URLs:\n" + "\n".join(f"- {url}" for url in st.session_state.processing_urls))
-
+        progress_placeholder.markdown("### Currently Processing URLs:\n" +
+                                      "\n".join(f"- {url}" for url in st.session_state.processing_urls))
 # --- End UI Progress Widget ---
 
 # Advanced Parallel Crawling using arun_many() with MemoryAdaptiveDispatcher.
@@ -226,7 +214,6 @@ async def crawl_parallel(urls: List[str], max_concurrent: int = 10):
             display_mode=DisplayMode.DETAILED
         )
     )
-    
     bc = BrowserConfig(
         headless=True,
         verbose=False,
@@ -254,9 +241,11 @@ async def recursive_crawl(url: str, max_depth: int = 9, current_depth: int = 0, 
         return
     processed.add(url)
     
-    # Add the URL to currently processing list and update progress widget.
     st.session_state.processing_urls.append(url)
     update_progress()
+    
+    # Add a short delay to mitigate Playwright navigation errors.
+    await asyncio.sleep(1)
     
     dispatcher = MemoryAdaptiveDispatcher(
         memory_threshold_percent=85.0,
@@ -285,7 +274,6 @@ async def recursive_crawl(url: str, max_depth: int = 9, current_depth: int = 0, 
         else:
             print(f"Error crawling {url}: {result.error_message}")
     
-    # Remove URL from processing list once done.
     if url in st.session_state.processing_urls:
         st.session_state.processing_urls.remove(url)
     update_progress()
@@ -318,7 +306,6 @@ def get_db_stats():
 # --- Main Streamlit App ---
 async def main():
     st.set_page_config(page_title="Dynamic RAG Chat System (Supabase)", page_icon="🤖", layout="wide")
-    # Initialize session state variables.
     if "messages" not in st.session_state:
         st.session_state.messages = []
     if "processing_complete" not in st.session_state:
@@ -332,7 +319,6 @@ async def main():
     if "processing_urls" not in st.session_state:
         st.session_state.processing_urls = []
     
-    # Create a placeholder for progress updates.
     st.session_state.progress_placeholder = st.empty()
     update_progress()
     
@@ -356,6 +342,9 @@ async def main():
 """)
     else:
         st.info("👋 Welcome! Start by adding a website to create your knowledge base.")
+    
+    # UI widget for concurrency.
+    max_concurrent = st.slider("Max concurrent URLs", min_value=1, max_value=50, value=10)
     
     ic, cc = st.columns([1, 2])
     with ic:
@@ -384,10 +373,10 @@ async def main():
                     fu = format_sitemap_url(url_input)
                     found = get_urls_from_sitemap(fu)
                     if found:
-                        await crawl_parallel(found, max_concurrent=10)
+                        await crawl_parallel(found, max_concurrent=max_concurrent)
                     else:
                         su = url_input.rstrip("/sitemap.xml")
-                        await crawl_parallel([su], max_concurrent=10)
+                        await crawl_parallel([su], max_concurrent=max_concurrent)
                 st.session_state.urls_processed.add(url_input)
                 st.session_state.processing_complete = True
                 st.session_state.is_processing = False
