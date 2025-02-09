@@ -4,7 +4,6 @@ import os
 os.system('playwright install')
 os.system('playwright install-deps')
 
-
 import streamlit as st
 import asyncio
 import json
@@ -15,15 +14,15 @@ from pydantic import BaseModel
 # --------------------------------------------------
 # SECRETS & CONFIGURATION
 # --------------------------------------------------
-# Ensure your .streamlit/secrets.toml has the following:
+# In your .streamlit/secrets.toml, include:
 #
 # [supabase]
 # url = "https://your-supabase-url.supabase.co"
 # key = "your_supabase_key_here"
 #
 # [crawl4ai]
-# openai_api_key = "your_openai_api_key_here"  # Required for the agent functionality
-
+# openai_api_key = "your_openai_api_key_here"
+#
 SUPABASE_URL = st.secrets["supabase"]["url"]
 SUPABASE_KEY = st.secrets["supabase"]["key"]
 OPENAI_API_KEY = st.secrets["crawl4ai"].get("openai_api_key")
@@ -44,17 +43,11 @@ from crawl4ai import AsyncWebCrawler, CrawlerRunConfig, CacheMode, BrowserConfig
 from crawl4ai.extraction_strategy import JsonCssExtractionStrategy
 
 # --------------------------------------------------
-# OpenAI Client Initialization for Agent
+# OpenAI Client Initialization for Agent (New Interface)
 # --------------------------------------------------
-import openai
-openai.api_key = OPENAI_API_KEY
-
-# Test the OpenAI client initialization.
-try:
-    _ = openai.Model.list()  # This will raise an exception if the API key is invalid.
-    st.write("OpenAI client initialized successfully.")
-except Exception as e:
-    st.error(f"Error initializing OpenAI client: {e}")
+# Using the new interface as per your snippet.
+from openai import OpenAI
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 # --------------------------------------------------
 # Data Model for Product Data
@@ -196,7 +189,7 @@ def get_all_products_dynamic() -> List[Product]:
 # --------------------------------------------------
 def agent_answer(query: str) -> str:
     """
-    Retrieves all stored products, builds a context prompt, and uses OpenAI's ChatCompletion API
+    Retrieves all stored products, builds a context prompt, and uses the new OpenAI client
     to answer the user's query about which products are good.
     """
     products = get_all_products_dynamic()
@@ -218,8 +211,8 @@ Answer the following query: {query}
 Which products are the best and why?"""
     
     try:
-        response = openai.ChatCompletion.create(
-            model="gpt-4",
+        completion = client.chat.completions.create(
+            model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": "You are an intelligent shopping assistant."},
                 {"role": "user", "content": prompt}
@@ -227,7 +220,7 @@ Which products are the best and why?"""
             temperature=0.7,
             max_tokens=150
         )
-        answer = response.choices[0].message["content"].strip()
+        answer = completion.choices[0].message
         return answer
     except Exception as e:
         return f"Error generating agent answer: {e}"
