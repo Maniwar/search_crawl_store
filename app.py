@@ -13,15 +13,15 @@ from dotenv import load_dotenv
 from supabase import create_client, Client
 from openai import AsyncOpenAI
 
-# Imports for Crawl4AI, dispatchers, and advanced components
+# Advanced imports for Crawl4AI
 from crawl4ai import (
     AsyncWebCrawler,
     BrowserConfig,
     CrawlerRunConfig,
     CacheMode,
-    RateLimiter,         # Advanced: for rate limiting
-    CrawlerMonitor,      # Advanced: for monitoring
-    DisplayMode          # Advanced: for monitor display mode
+    RateLimiter,
+    CrawlerMonitor,
+    DisplayMode
 )
 from crawl4ai.async_dispatcher import MemoryAdaptiveDispatcher
 
@@ -125,14 +125,14 @@ js_click_all = """
 })();
 """
 
-# Build a run configuration with advanced options for faster and stable extraction.
+# Build a run configuration with advanced options
 def get_run_config(with_js: bool = False) -> CrawlerRunConfig:
     kwargs = {
         "cache_mode": CacheMode.BYPASS,
         "stream": False,
         "exclude_external_links": False,
         "wait_for_images": True,
-        "delay_before_return_html": 1.0  # Wait for 1 second before extracting content
+        "delay_before_return_html": 1.0  # extra delay for dynamic content
     }
     if with_js:
         kwargs["js_code"] = [js_click_all]
@@ -193,9 +193,9 @@ async def process_and_store_document(url: str, md: str):
     insert_tasks = [insert_chunk_to_supabase(item) for item in processed_chunks]
     await asyncio.gather(*insert_tasks)
 
-# Advanced Parallel Crawling using arun_many() with MemoryAdaptiveDispatcher.
+# Advanced parallel crawling using arun_many() with MemoryAdaptiveDispatcher.
 async def crawl_parallel(urls: List[str], max_concurrent: int = 10):
-    # Configure advanced dispatcher with RateLimiter and Monitor
+    # Configure advanced dispatcher with RateLimiter and CrawlerMonitor.
     dispatcher = MemoryAdaptiveDispatcher(
         memory_threshold_percent=90.0,
         check_interval=1.0,
@@ -318,7 +318,7 @@ async def main():
                     fu = format_sitemap_url(url_input)
                     found = get_urls_from_sitemap(fu)
                     if found:
-                        # Crawl every URL from the sitemap concurrently using advanced dispatching.
+                        # Crawl every URL from the sitemap concurrently.
                         await crawl_parallel(found, max_concurrent=10)
                     else:
                         su = url_input.rstrip("/sitemap.xml")
