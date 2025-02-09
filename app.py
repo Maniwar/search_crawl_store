@@ -91,8 +91,8 @@ product_schema = {
 def get_target_urls(query: str) -> dict:
     """
     Generate search URLs for different target sites.
-    Dynamically adjust the URLs based on the query. For example, if "used" is in the query,
-    append "used" to the search parameters for Facebook Marketplace and eBay.
+    Dynamically adjust the URLs based on the query.
+    If "used" is in the query, append "used" to the Facebook Marketplace and eBay URLs.
     Replace these example URLs with your actual target URLs.
     """
     query_encoded = query.replace(" ", "+")
@@ -114,7 +114,8 @@ async def scrape_site_css(site: str, url: str) -> List[Product]:
     Scrapes the given URL using Crawl4AI with a CSS-based extraction strategy.
     Returns a list of Product objects.
     """
-    browser_conf = BrowserConfig(headless=True)
+    # Force Chromium to avoid frozen WebKit issues.
+    browser_conf = BrowserConfig(headless=True, browser="chromium")
     run_conf = CrawlerRunConfig(
         cache_mode=CacheMode.BYPASS,
         extraction_strategy=JsonCssExtractionStrategy(product_schema)
@@ -199,7 +200,7 @@ def get_all_products_dynamic() -> List[Product]:
 # --------------------------------------------------
 def agent_answer(query: str) -> str:
     """
-    Retrieves all stored products, builds a context prompt, and uses the new OpenAI client
+    Retrieves all stored products, builds a context prompt, and uses the OpenAI client
     to answer the user's query about which products are good.
     """
     products = get_all_products_dynamic()
