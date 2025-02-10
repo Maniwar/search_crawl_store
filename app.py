@@ -188,41 +188,41 @@ async def main():
 
     with st.sidebar:
         st.header("Configuration")
-        st.session_state.max_concurrent = st.slider("Concurrent URLs", 1, 50, value=st.session_state.max_concurrent, step=5, help="Number of URLs to crawl in parallel for speed.")
+        st.session_state.max_concurrent = st.slider("Concurrent URLs", 1, 50, value=st.session_state.get("max_concurrent", 25), step=5, help="Number of URLs to crawl in parallel for speed.") # Corrected
         st.checkbox(
             "Follow Links Recursively",
-            value=st.session_state.follow_links_recursively,
+            value=st.session_state.get("follow_links_recursively", False), # Corrected
             key="checkbox_follow_links_recursive_value",
             help="Crawl internal links recursively.",
             on_change=update_follow_links_recursively # Use defined callback function
         )
         with st.expander("Advanced Settings"):
-            st.session_state.chunk_max_chars = st.number_input("Chunk Size (Characters)", 1000, 8000, value=st.session_state.chunk_max_chars, step=500, help="Text chunk size for processing.")
-            st.session_state.n_matches = st.slider("Retrieval Matches (Chat)", 1, 7, value=st.session_state.n_matches, step=1, help="Number of documents retrieved for chat context.")
-            st.session_state.max_snippet_len = st.slider("Snippet Length (Chat)", 100, 1200, value=st.session_state.max_snippet_len, step=100, help="Length of reference snippets in chat.")
-            st.session_state.crawl_delay = st.slider("Crawl Delay (Seconds)", 0.0, 3.0, value=st.session_state.crawl_delay, step=0.1, format="%.1f", help="Delay between requests to avoid overloading websites.")
-            st.session_state.crawl_word_threshold = st.slider("Word Threshold (Indexing)", 10, 150, value=st.session_state.crawl_word_threshold, step=10, help="Minimum words for indexing text blocks.")
+            st.session_state.chunk_max_chars = st.number_input("Chunk Size (Characters)", 1000, 8000, value=st.session_state.get("chunk_max_chars", 3800), step=500, help="Text chunk size for processing.") # Corrected
+            st.session_state.n_matches = st.slider("Retrieval Matches (Chat)", 1, 7, value=st.session_state.get("n_matches", 4), step=1, help="Number of documents retrieved for chat context.") # Corrected
+            st.session_state.max_snippet_len = st.slider("Snippet Length (Chat)", 100, 1200, value=st.session_state.get("max_snippet_len", 450), step=100, help="Length of reference snippets in chat.") # Corrected
+            st.session_state.crawl_delay = st.slider("Crawl Delay (Seconds)", 0.0, 3.0, value=st.session_state.get("crawl_delay", 0.4), step=0.1, format="%.1f", help="Delay between requests to avoid overloading websites.") # Corrected
+            st.session_state.crawl_word_threshold = st.slider("Word Threshold (Indexing)", 10, 150, value=st.session_state.get("crawl_word_threshold", 60), step=10, help="Minimum words for indexing text blocks.") # Corrected
             st.checkbox(
                 "Enable JavaScript Rendering",
-                value=st.session_state.use_js_for_crawl,
+                value=st.session_state.get("use_js_for_crawl", False), # Corrected
                 key="checkbox_use_js_for_crawl_value",
                 help="Render dynamic content, but crawling will be slower.",
                 on_change=update_use_js_crawl # Use defined callback function
             )
             st.subheader("Rate Limiter")
-            st.session_state.rate_limiter_base_delay_min = st.slider("Base Delay (Min Sec)", 0.1, 3.0, value=st.session_state.rate_limiter_base_delay_min, step=0.1, format="%.1f")
-            st.session_state.rate_limiter_base_delay_max = st.slider("Base Delay (Max Sec)", 0.1, 7.0, value=st.session_state.rate_limiter_base_delay_max, step=0.1, format="%.1f")
-            st.session_state.rate_limiter_max_delay = st.slider("Max Delay (Sec)", 5.0, 45.0, value=st.session_state.rate_limiter_max_delay, step=5.0, format="%.0f")
-            st.session_state.rate_limiter_max_retries = st.slider("Max Retries", 1, 4, value=st.session_state.rate_limiter_max_retries, step=1)
+            st.session_state.rate_limiter_base_delay_min = st.slider("Base Delay (Min Sec)", 0.1, 3.0, value=st.session_state.get("rate_limiter_base_delay_min", 0.4), step=0.1, format="%.1f") # Corrected
+            st.session_state.rate_limiter_base_delay_max = st.slider("Base Delay (Max Sec)", 0.1, 7.0, value=st.session_state.get("rate_limiter_base_delay_max", 1.2), step=0.1, format="%.1f") # Corrected
+            st.session_state.rate_limiter_max_delay = st.slider("Max Delay (Sec)", 5.0, 45.0, value=st.session_state.get("rate_limiter_max_delay", 15.0), step=5.0, format="%.0f") # Corrected
+            st.session_state.rate_limiter_max_retries = st.slider("Max Retries", 1, 4, value=st.session_state.get("rate_limiter_max_retries", 2), step=1) # Corrected
             st.subheader("Crawl Rules")
             st.checkbox(
                 "Respect robots.txt",
-                value=st.session_state.get("check_robots_txt", False), # Corrected line: use .get() for value
+                value=st.session_state.get("check_robots_txt", False), # Corrected - using .get()
                 key="check_robots_txt",
                 help="Enable robots.txt compliance (recommended)."
             )
-            st.session_state.url_include_patterns = st.text_area("Include URLs matching pattern (one per line)", value=st.session_state.url_include_patterns, height=70, key="url_include_patterns", help="Crawl only URLs that match these patterns (leave empty to include all).")
-            st.session_state.url_exclude_patterns = st.text_area("Exclude URLs matching pattern (one per line)", value=st.session_state.url_exclude_patterns, height=70, key="url_exclude_patterns", help="Exclude URLs that match these patterns (leave empty to exclude none).")
+            st.session_state.url_include_patterns = st.text_area("Include URLs matching pattern (one per line)", value=st.session_state.get("url_include_patterns", ""), height=70, key="url_include_patterns", help="Crawl only URLs that match these patterns (leave empty to include all).") # Corrected
+            st.session_state.url_exclude_patterns = st.text_area("Exclude URLs matching pattern (one per line)", value=st.session_state.get("url_exclude_patterns", ""), height=70, key="url_exclude_patterns", help="Exclude URLs that match these patterns (leave empty to exclude none).") # Corrected
 
         st.button("Clear Knowledge Base", on_click=clear_database_button_callback, disabled=st.session_state.is_processing) # Use callback for button
 
