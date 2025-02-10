@@ -20,10 +20,10 @@ from typing import List, Dict, Any, Optional # Keep Optional import
 from urllib.parse import urlparse, urljoin, urlunparse
 from xml.etree import ElementTree
 from dotenv import load_dotenv
+import nltk
+from nltk.tokenize import sent_tokenize # Ensure this line is present
 from supabase import create_client, Client
 from openai import AsyncOpenAI
-import nltk
-from nltk.tokenize import sent_tokenize
 
 # Advanced imports for Crawl4AI, dispatchers, and rate limiting
 from crawl4ai import (
@@ -39,6 +39,8 @@ from crawl4ai.async_dispatcher import MemoryAdaptiveDispatcher
 from collections import deque
 
 nltk.download('punkt') # Ensure punkt tokenizer is downloaded
+nltk.download('punkt_tab') # ADD THIS LINE to download punkt_tab resource
+
 load_dotenv()
 
 # Environment variables and client setup
@@ -280,14 +282,14 @@ async def discover_internal_links(st_session_state, start_urls: List[str], max_d
 #############################
 # Parallel Crawl (arun_many) (No Changes - corrected session_state already)
 #############################
-async def crawl_parallel(st_session_state, urls: List[str], max_concurrent: int = 10):
+async def crawl_parallel(st_session_state, urls: List[str], max_concurrent: int = 10, use_js: bool = False): # Pass use_js
     dispatcher = MemoryAdaptiveDispatcher(
         memory_threshold_percent=90.0,
         check_interval=1.0,
         max_session_permit=max_concurrent,
         rate_limiter=RateLimiter(
-            base_delay=(st_session_state.get("rate_limiter_base_delay_min", 1.0), st_session_state.get("rate_limiter_base_delay_max", 2.0)),
-            max_delay=st_session_state.get("rate_limiter_max_delay", 30.0),
+            base_delay=(st_session_state.get("rate_limiter_base_delay_min", 1.0), st.session_state.get("rate_limiter_base_delay_max", 2.0)),
+            max_delay=st.session_state.get("rate_limiter_max_delay", 30.0),
             max_retries=st.session_state.get("rate_limiter_max_retries", 2),
             rate_limit_codes=[429, 503]
         ),
@@ -301,7 +303,7 @@ async def crawl_parallel(st_session_state, urls: List[str], max_concurrent: int 
         verbose=False,
         extra_args=["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox"]
     )
-    run_conf = get_run_config(st_session_state, with_js=st_session_state.get("use_js_for_crawl", False))
+    run_conf = get_run_config(st_session_state, with_js=use_js) # Pass use_js to get_run_config
 
     async with AsyncWebCrawler(config=bc) as crawler:
         results = await crawler.arun_many(
@@ -319,10 +321,10 @@ async def crawl_parallel(st_session_state, urls: List[str], max_concurrent: int 
 #############################
 # DB & Stats (No Changes)
 #############################
-def delete_all_chunks(): # No change
+def delete_all_chunks():
     supabase.table("rag_chunks").delete().neq("id", "").execute()
 
-def get_db_stats(): # No change
+def get_db_stats():
     try:
         r = supabase.table("rag_chunks").select("id, url, metadata").execute()
         d = r.data
@@ -347,36 +349,36 @@ def get_db_stats(): # No change
 #############################
 # UI Progress (No Changes)
 #############################
-def init_progress_state(): # No change
+def init_progress_state():
     if "processing_urls" not in st.session_state:
         st.session_state.processing_urls = []
     if "progress_placeholder" not in st.session_state:
         st.session_state.progress_placeholder = st.sidebar.empty()
 
 
-def add_processing_url(url: str): # No change
+def add_processing_url(url: str):
     norm_url = normalize_url(url)
     if norm_url not in st.session_state.processing_urls:
         st.session_state.processing_urls.append(norm_url)
     update_progress()
 
 
-def remove_processing_url(url: str): # No change
+def remove_processing_url(url: str):
     norm_url = normalize_url(url)
     if norm_url in st.session_state.processing_urls:
         st.session_state.processing_urls.remove(norm_url)
     update_progress()
 
 
-def update_progress(): # No change
+def update_progress():
     unique_urls = list(dict.fromkeys(st.session_state.get("processing_urls", [])))
     content = "### Currently Processing URLs:\n" + "\n".join(f"- {url}" for url in unique_urls)
     st.session_state.progress_placeholder.markdown(content)
 
 #############################
-# Main Streamlit App (Modified retrieve_relevant_documentation call and expander)
+# Main Streamlit App (No Changes - session_state.get already corrected)
 #############################
-async def main(): # Modified - call retrieve_relevant_documentation with params, expander for all references
+async def main():
     st.set_page_config(page_title="Dynamic RAG Chat System (Supabase)", page_icon="🤖", layout="wide")
     init_progress_state()
 
