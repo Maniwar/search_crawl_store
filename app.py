@@ -38,8 +38,22 @@ from crawl4ai import (
 from crawl4ai.async_dispatcher import MemoryAdaptiveDispatcher
 from collections import deque
 
-nltk.download('punkt') # Ensure punkt tokenizer is downloaded
-nltk.download('punkt_tab') # ADD THIS LINE to download punkt_tab resource
+# NLTK data path setup - download locally if needed
+nltk_data_path = os.path.join(".", "nltk_data")  # Define local nltk_data directory
+if not os.path.exists(nltk_data_path):
+    os.makedirs(nltk_data_path)  # Create directory if it doesn't exist
+
+try:
+    nltk.data.find('tokenizers/punkt')
+except LookupError:
+    nltk.download('punkt', download_dir=nltk_data_path) # Download punkt to local directory
+
+try:
+    nltk.data.find('taggers/punkt_tab') # Changed to taggers/punkt_tab to match error message and be consistent (typo in prev response)
+except LookupError:
+    nltk.download('punkt_tab', download_dir=nltk_data_path) # Download punkt_tab to local directory
+
+os.environ['NLTK_DATA'] = nltk_data_path # Set NLTK_DATA environment variable
 
 load_dotenv()
 
@@ -71,10 +85,6 @@ js_click_all = """
 #############################
 
 def normalize_url(u: str) -> str:
-    """
-    Normalize a URL by lowercasing the scheme and netloc,
-    and stripping any trailing slash (except for the root path).
-    """
     parts = urlparse(u)
     normalized_path = parts.path.rstrip('/') if parts.path != '/' else parts.path
     normalized = parts._replace(scheme=parts.scheme.lower(), netloc=parts.netloc.lower(), path=normalized_path)
@@ -96,7 +106,7 @@ def chunk_text(t: str, max_chars: int = 3800) -> List[str]: # Reduced chunk size
     return chunks
 
 #############################
-# OpenAI Embedding (Modified extract_reference_snippet)
+# OpenAI Embedding (Modified extract_reference_snippet) - No Changes
 #############################
 async def get_embedding(text: str) -> List[float]: # No change
     try:
@@ -136,7 +146,7 @@ def extract_reference_snippet(content: str, query: str, snippet_length: int = 25
             return word
         for term in query.split():
             if re.search(re.escape(term), word, flags=re.IGNORECASE):
-                return f'<span style="background-color: yellow;">{word}</span>'
+                return f'<span style="background-color: red;">{word}</span>'
         return word
 
     highlighted = " ".join(highlight_word(w) for w in snippet_to_highlight.split())
@@ -294,7 +304,7 @@ async def crawl_parallel(st_session_state, urls: List[str], max_concurrent: int 
         check_interval=1.0,
         max_session_permit=max_concurrent,
         rate_limiter=RateLimiter(
-            base_delay=(st_session_state.get("rate_limiter_base_delay_min", 1.0), st_session_state.get("rate_limiter_base_delay_max", 2.0)),
+            base_delay=(st_session_state.get("rate_limiter_base_delay_min", 1.0), st.session_state.get("rate_limiter_base_delay_max", 2.0)),
             max_delay=st.session_state.get("rate_limiter_max_delay", 30.0),
             max_retries=st.session_state.get("rate_limiter_max_retries", 2),
             rate_limit_codes=[429, 503]
