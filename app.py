@@ -45,10 +45,10 @@ if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY or not OPENAI_API_KEY:
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
-# --- JS snippet --- (No changes)
+# --- JS snippet ---
 js_click_all = """(async () => { const clickable = document.querySelectorAll("a, button"); for (let el of clickable) { try { el.click(); await new Promise(r => setTimeout(r, 150)); } catch(e) {} } })();"""
 
-# --- Optimized Helper Functions --- (No changes)
+# --- Helper Functions ---
 def normalize_url(u: str) -> str:
     parts = urlparse(u)
     normalized_path = parts.path.rstrip('/') if parts.path != '/' else parts.path
@@ -86,7 +86,7 @@ def cosine_similarity(vec1, vec2):
         return 0
     return dot_product / (magnitude1 * magnitude2)
 
-# --- Optimized Semantic Snippet Extraction --- (No changes)
+# --- Optimized Semantic Snippet Extraction ---
 def extract_reference_snippet(content: str, query: str, snippet_length: int = 250) -> str:
     sentences = sent_tokenize(content)
     query_embedding = asyncio.run(get_embedding(query))
@@ -110,7 +110,7 @@ def extract_reference_snippet(content: str, query: str, snippet_length: int = 25
     highlighted_snippet = " ".join(highlight_word(word) for word in snippet_to_highlight.split())
     return highlighted_snippet
 
-# --- Optimized RAG retrieval --- (No changes)
+# --- Optimized RAG retrieval ---
 def retrieve_relevant_documents(query: str, n_matches: int, max_snippet_len: int) -> str:
     embedding_vector = asyncio.run(get_embedding(query))
     if embedding_vector is None:
@@ -127,7 +127,7 @@ def retrieve_relevant_documents(query: str, n_matches: int, max_snippet_len: int
         snippets.append(f"""\n#### {doc['title']}\n\n{snippet}\n\n**Source:** [{doc['metadata']['source']}]({doc['url']})\nSimilarity: {doc['similarity']:.2f}""")
     return "\n".join(snippets)
 
-# --- Sitemap Helpers --- (No changes)
+# --- Sitemap Helpers ---
 def get_urls_from_sitemap(sitemap_url: str) -> List[str]:
     try:
         response = requests.get(sitemap_url, stream=True, timeout=8)
@@ -156,18 +156,102 @@ def format_sitemap_url(base_url: str) -> str:
 def same_domain(url1: str, url2: str) -> bool:
     return urlparse(url1).netloc == urlparse(url2).netloc
 
-# --- Optimized Crawler Config --- (No changes)
-get_crawler_config = get_crawler_config
+# --- Optimized Crawler Config ---
+def get_crawler_config(use_js: bool, crawl_delay: float, word_threshold: int, check_robots: bool, url_patterns: Optional[List[str]] = None, exclude_patterns: Optional[List[str]] = None) -> CrawlerRunConfig:
+    return CrawlerRunConfig(
+        cache_mode=CacheMode.BYPASS, stream=False, exclude_external_links=True, wait_for_images=False,
+        delay_before_return_html=crawl_delay, excluded_tags=["header", "footer", "nav", "aside", "script", "style", "noscript"],
+        word_count_threshold=word_threshold, js_code=[js_click_all] if use_js else None, monitor=CrawlerMonitor(display_mode=DisplayMode.SILENT),
+        check_robots_txt=check_robots, url_patterns_include=url_patterns, url_patterns_exclude=exclude_patterns
+    )
 
-# --- Document Processing & Storage --- (No changes)
-extract_title_and_summary_from_markdown = extract_title_and_summary_from_markdown
-process_chunk = process_chunk
-insert_chunk_to_supabase_batch = insert_chunk_to_supabase_batch
-process_and_store_document = process_and_store_document
+# --- Document Processing & Storage ---
+def extract_title_and_summary_from_markdown(markdown_text: str) -> Dict[str, str]:
+    lines = markdown_text.splitlines()
+    title = "Untitled Document"
+    for line in lines:
+        if line.lstrip().startswith("#"):
+            title = line.lstrip("# ").strip()
+            break
+    summary = markdown_text[:400] + "..." if len(markdown_text) > 400 else markdown_text
+    return {"title": title, "summary": summary}
 
-# --- Optimized Crawling Functions --- (No changes)
-crawl_parallel = crawl_parallel
-discover_internal_links = discover_internal_links
+async def process_chunk(chunk: str, num: int, url: str) -> Dict[str, Any]:
+    metadata = {"source": urlparse(url).netloc, "chunk_number": num, "crawled_at": datetime.now(timezone.utc).isoformat(), "url_path": urlparse(url).path}
+    title_summary = extract_title_and_summary_from_markdown(chunk)
+    embedding_vector = await get_embedding(title_summary["summary"])
+    if embedding_vector is None: return None
+
+    return {"id": f"{url}_{num}", "url": url, "chunk_number": num, "title": title_summary["title"], "summary": title_summary["summary"], "content": chunk, "metadata": metadata, "embedding": embedding_vector}
+
+async def insert_chunk_to_supabase_batch(chunk_data_list: List[Dict[str, Any]]) -> None:
+    if chunk_data_list:
+        try:
+            supabase.table("rag_chunks").upsert(chunk_data_list, on_conflict="id").execute()
+        except Exception as e:
+            st.error(f"Supabase batch insert error: {e}")
+
+async def process_and_store_document(doc_url: str, markdown_content: str) -> None:
+    chunks = chunk_text(markdown_content, max_chars=st.session_state.chunk_max_chars)
+    process_tasks = [process_chunk(chunk, i, doc_url) for i, chunk in enumerate(chunks)]
+    processed_chunks = await asyncio.gather(*process_tasks)
+    valid_chunks = [chunk for chunk in processed_chunks if chunk]
+    await insert_chunk_to_supabase_batch(valid_chunks)
+
+# --- Optimized Crawling Functions ---
+async def crawl_parallel(urls: List[str], max_concurrent: int):
+    if not urls:
+        st.warning("crawl_parallel: No URLs to crawl.")
+        return
+
+    dispatcher = MemoryAdaptiveDispatcher(
+        memory_threshold_percent=85.0, check_interval=0.8, max_session_permit=max_concurrent,
+        rate_limiter=RateLimiter(base_delay=(st.session_state.rate_limiter_base_delay_min, st.session_state.rate_limiter_base_delay_max),
+                                 max_delay=st.session_state.rate_limiter_max_delay, max_retries=st.session_state.rate_limiter_max_retries, rate_limit_codes=[429, 503]),
+        monitor=CrawlerMonitor(display_mode=DisplayMode.SILENT)
+    )
+    browser_config = BrowserConfig(headless=True, verbose=False, extra_args=["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox"])
+    crawler_config = get_crawler_config(st.session_state.use_js_for_crawl, st.session_state.crawl_delay, st.session_state.crawl_word_threshold, st.session_state.check_robots_txt, st.session_state.url_include_patterns, st.session_state.url_exclude_patterns)
+
+    progress_bar = st.progress(0)
+    for index, result in enumerate(AsyncWebCrawler(config=browser_config).arun_many(urls=urls, config=crawler_config, dispatcher=dispatcher), 1):
+        progress_bar.progress(int((index / len(urls)) * 100) if urls else 0)
+        if result.success:
+            await process_and_store_document(result.url, result.markdown_v2.raw_markdown)
+        else:
+            st.error(f"Crawl failed for {result.url}: {result.error_message}")
+    progress_bar.empty()
+
+async def discover_internal_links(start_urls: List[str], max_depth: int = 2) -> List[str]:
+    browser_config = BrowserConfig(headless=True, verbose=False, extra_args=["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox"])
+    crawler_config = get_crawler_config(st.session_state.use_js_for_crawl, st.session_state.crawl_delay, st.session_state.crawl_word_threshold, st.session_state.check_robots_txt, st.session_state.url_include_patterns, st.session_state.url_exclude_patterns)
+    discovered_urls = set()
+    crawl_queue = deque([(url, 0) for url in start_urls])
+    visited_urls = set()
+    progress_bar = st.progress(0)
+    processed_count = 0
+    total_count = len(start_urls)
+
+    async with AsyncWebCrawler(config=browser_config) as crawler:
+        while crawl_queue:
+            url, depth = crawl_queue.popleft()
+            if url in visited_urls or depth > max_depth: continue
+            visited_urls.add(url)
+
+            crawl_result = await crawler.arun(url=url, config=crawler_config)
+            processed_count += 1
+            progress_bar.progress(int((processed_count / total_count) * 100) if total_count > 0 else 0)
+
+            if crawl_result.success:
+                discovered_urls.add(url)
+                for link in crawl_result.links.get('internal', []):
+                    absolute_url = urljoin(url, link.get('href', ''))
+                    if absolute_url and same_domain(absolute_url, url) and absolute_url not in visited_urls:
+                        crawl_queue.append((absolute_url, depth + 1))
+            else:
+                st.error(f"Discovery failed for {url}: {crawl_result.error_message}")
+        progress_bar.empty()
+        return list(discovered_urls)
 
 # --- Database and Stats Functions --- (No changes)
 delete_all_chunks = delete_all_chunks
