@@ -17,7 +17,7 @@ import requests
 import re
 import streamlit as st
 from datetime import datetime, timezone
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Set  # ADDED Set to the import
 from urllib.parse import urlparse, urljoin, urlunparse, unquote
 from xml.etree import ElementTree
 from dotenv import load_dotenv
@@ -30,7 +30,7 @@ from crawl4ai import (AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMod
 from crawl4ai.async_dispatcher import MemoryAdaptiveDispatcher
 from collections import deque
 
-# NLTK data path setup (using local directory for persistence)
+# NLTK data path setup
 nltk_data_path = os.path.join(".", "nltk_data")
 if not os.path.exists(nltk_data_path): os.makedirs(nltk_data_path)
 nltk.data.path.append(nltk_data_path)
@@ -56,7 +56,7 @@ openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 # --- JS snippet for Crawl4AI ---
 js_click_all = """(async () => { const clickable = document.querySelectorAll("a, button"); for (let el of clickable) { try { el.click(); await new Promise(r => setTimeout(r, 300)); } catch(e) {} } })();"""
 
-# --- Helper Functions --- (No changes from previous versions, consolidated here for clarity)
+# --- Helper Functions ---
 def normalize_url(u: str) -> str:
     parts = urlparse(u)
     normalized_path = parts.path.rstrip('/') if parts.path != '/' else parts.path
@@ -107,7 +107,7 @@ def extract_reference_snippet(content: str, query: str, snippet_length: int = 25
         return word
     highlighted_snippet = " ".join(highlight_word(word) for word in snippet_to_highlight.split())
     return highlighted_snippet
-def retrieve_relevant_documents(query: str, n_matches: int = 3, max_snippet_len: int = 400) -> str:
+def retrieve_relevant_documentation(query: str, n_matches: int = 3, max_snippet_len: int = 400) -> str:
     e = asyncio.run(get_embedding(query))
     r = supabase.rpc("match_documents", {"query_embedding": e, "match_count": n_matches * 2}).execute()
     d = r.data
@@ -143,8 +143,8 @@ def format_sitemap_url(url: str) -> str:
 def same_domain(url1: str, url2: str) -> bool:
     return urlparse(url1).netloc == urlparse(url2).netloc
 
-# --- Optimized Crawler Config --- (No changes)
-def get_crawler_config(st_session_state) -> CrawlerRunConfig: # No change
+# --- Optimized Crawler Config ---
+def get_crawler_config(st_session_state) -> CrawlerRunConfig:
     browser_config = BrowserConfig(
         use_js=st_session_state.get("use_js_for_crawl", False),
         js_snippets=[js_click_all]
@@ -152,7 +152,7 @@ def get_crawler_config(st_session_state) -> CrawlerRunConfig: # No change
     rate_limiter = RateLimiter(
         base_delay_range=(st_session_state.get("rate_limiter_base_delay_min", 0.4), st_session_state.get("rate_limiter_base_delay_max", 1.2)),
         max_delay=st_session_state.get("rate_limiter_max_delay", 15.0),
-        max_retries=st_session_state.get("rate_limiter_max_retries", 2)
+        max_retries=st.session_state.get("rate_limiter_max_retries", 2)
     )
     crawler_config = CrawlerRunConfig(
         browser_config=browser_config,
@@ -162,31 +162,31 @@ def get_crawler_config(st_session_state) -> CrawlerRunConfig: # No change
     )
     return crawler_config
 
-# --- Document Processing & Storage --- (No changes)
-def extract_title_and_summary_from_markdown(markdown_content: str) -> dict: # No change
+# --- Document Processing & Storage ---
+def extract_title_and_summary_from_markdown(markdown_content: str) -> dict:
     title = title_match.group(1).strip() if (title_match := re.search(r"^#\s+(.*)", markdown_content, re.MULTILINE)) else "No Title Found"
     sentences = sent_tokenize(markdown_content)
     summary = sentences[0] if sentences else "No summary available."
     return {"title": title, "summary": summary}
-async def process_chunk(url: str, chunk_id: int, content: str, metadata: dict, embedding_model): # No change
+async def process_chunk(url: str, chunk_id: int, content: str, metadata: dict, embedding_model):
     if not content.strip(): return None
     title_summary = extract_title_and_summary_from_markdown(content) if metadata.get('filetype') == 'markdown' else {'title': metadata.get('title', 'No Title'), 'summary': ''}
     embedding_vector = await embedding_model(content)
     if embedding_vector is None: return None
     return {'url': url, 'chunk_id': chunk_id, 'content': content, 'embedding': embedding_vector, 'metadata': metadata, 'title': title_summary['title'], 'summary': title_summary['summary']}
-async def insert_chunk_to_supabase_batch(chunk_batch: List[dict]): # No change
+async def insert_chunk_to_supabase_batch(chunk_batch: List[dict]):
     if not chunk_batch: return
     try: data, count = supabase.table("rag_chunks").insert(chunk_batch).execute()
     except Exception as e: print(f"Error inserting chunk batch to Supabase: {e}")
-async def process_and_store_document(url: str, content: str, metadata: dict, chunk_max_chars: int, crawl_word_threshold: int, embedding_model): # No change
+async def process_and_store_document(url: str, content: str, metadata: dict, chunk_max_chars: int, crawl_word_threshold: int, embedding_model):
     processed_chunks = [chunk_info for i, chunk in enumerate(chunk_text(content, chunk_max_chars))
                        if len(chunk.split()) > crawl_word_threshold and (chunk_info := await process_chunk(url, i, chunk, metadata, embedding_model))]
     if processed_chunks: await insert_chunk_to_supabase_batch(processed_chunks)
 
-# --- Database and Stats Functions --- (No changes)
-def delete_all_chunks(): # No change
+# --- Database and Stats Functions ---
+def delete_all_chunks():
     supabase.table("rag_chunks").delete().neq("id", "").execute()
-def get_db_stats(): # No change
+def get_db_stats():
     try:
         res_docs = supabase.table('rag_chunks').select('id', count='exact').execute()
         doc_count = res_docs.count if res_docs else 0
@@ -198,34 +198,34 @@ def get_db_stats(): # No change
         print(f"DB Stats error: {e}")
         return None
 
-# --- UI Progress functions --- (No changes)
-def init_progress_state(): # No change
+# --- UI Progress functions ---
+def init_progress_state():
     if "processing_urls" not in st.session_state: st.session_state.processing_urls = []
     if "progress_placeholder" not in st.session_state: st.session_state.progress_placeholder = st.sidebar.empty()
     if 'discover_links_progress' not in st.session_state: st.session_state.discover_links_progress = 0.0
     if 'crawl_index_progress' not in st.session_state: st.session_state.crawl_index_progress = 0.0
-def update_progress_discover_links(processed_urls, message): # No change
+def update_progress_discover_links(processed_urls, message):
     total_urls = st.session_state.get("total_urls_to_discover", 0)
     if total_urls > 0:
         progress_percentage = (processed_urls / total_urls)
         st.session_state.discover_links_progress = progress_percentage
         st.session_state.progress_placeholder.progress(st.session_state.discover_links_progress, text=f"{message} ({processed_urls}/{total_urls})")
     else: st.session_state.progress_placeholder.info("Link discovery started...")
-def update_progress_crawl_index(processed_urls, total_urls, message): # No change
+def update_progress_crawl_index(processed_urls, total_urls, message):
     if total_urls > 0:
         progress_percentage = (processed_urls / total_urls)
         st.session_state.crawl_index_progress = progress_percentage
         st.session_state.progress_placeholder.progress(st.session_state.crawl_index_progress, text=f"{message} ({processed_urls}/{total_urls})")
     else: st.session_state.progress_placeholder.info("Crawling and Indexing started...")
-def add_processing_url(url): # No change
+def add_processing_url(url):
     norm_url = normalize_url(url)
     if norm_url not in st.session_state.processing_urls: st.session_state.processing_urls.append(norm_url)
     update_progress()
-def remove_processing_url(url): # No change
+def remove_processing_url(url):
     norm_url = normalize_url(url)
     if norm_url in st.session_state.processing_urls: st.session_state.processing_urls.remove(norm_url)
     update_progress()
-def update_progress(): # No change
+def update_progress():
     discover_progress = st.session_state.get("discover_links_progress", 0.0)
     crawl_index_progress = st.session_state.get("crawl_index_progress", 0.0)
     overall_progress = (discover_progress + crawl_index_progress) / 2.0
@@ -235,16 +235,16 @@ def update_progress(): # No change
         content = "### URLs in Queue:\n" + "\n".join(f"- {url}" for url in unique_urls)
         st.session_state.progress_placeholder.markdown(content)
 
-# --- Callback functions for UI elements --- (No changes)
-def update_use_js_crawl(): # No change
+# --- Callback functions for UI elements ---
+def update_use_js_crawl():
     st.session_state.use_js_for_crawl = st.session_state.checkbox_use_js_for_crawl_value
-def update_follow_links_recursively(): # No change
+def update_follow_links_recursively():
     st.session_state.follow_links_recursively = st.session_state.checkbox_follow_links_recursive_value
-def clear_database_button_callback(): # No change
+def clear_database_button_callback():
     delete_all_chunks()
 
-# --- Crawling Functions --- (No changes)
-async def discover_internal_links(st_session_state, start_urls: List[str], max_depth: int = 2) -> Set[str]: # No change
+# --- Crawling Functions ---
+async def discover_internal_links(st_session_state, start_urls: List[str], max_depth: int = 2) -> Set[str]:
     crawler_config = get_crawler_config(st_session_state)
     crawler = AsyncWebCrawler(crawler_config=crawler_config)
     discovered_urls: Set[str] = set()
@@ -271,7 +271,7 @@ async def discover_internal_links(st_session_state, start_urls: List[str], max_d
         else: remove_processing_url(normalized_url, status='done', message='Discovered links.')
     await crawler.close_browser()
     return discovered_urls
-async def crawl_parallel(st_session_state, urls: List[str], max_concurrent: int): # No change
+async def crawl_parallel(st_session_state, urls: List[str], max_concurrent: int):
     crawler_config = get_crawler_config(st_session_state)
     crawler = AsyncWebCrawler(crawler_config=crawler_config)
     dispatcher = MemoryAdaptiveDispatcher(max_concurrency=max_concurrent)
@@ -308,7 +308,7 @@ async def crawl_parallel(st_session_state, urls: List[str], max_concurrent: int)
     await crawler.close_browser()
     return total_indexed_chunks
 
-# --- Main Streamlit App --- (No changes)
+# --- Main Streamlit App ---
 async def main():
     st.set_page_config(page_title="Dynamic RAG Chat System (Supabase)", page_icon="🤖", layout="wide")
     init_progress_state()
