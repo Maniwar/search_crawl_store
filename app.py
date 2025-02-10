@@ -1,4 +1,4 @@
-from issues import nest_asyncio
+import nest_asyncio
 nest_asyncio.apply()
 import os
 import subprocess
