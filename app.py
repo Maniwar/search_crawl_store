@@ -337,8 +337,8 @@ def get_db_stats():
 
 # --- Main Streamlit App ---
 async def main():
+    st.set_page_config(page_title="Dynamic RAG Chat System (Supabase)", page_icon="🤖", layout="wide") # MOVED to FIRST LINE
     st.write(f"Initial st.session_state.urls_processed: {st.session_state.urls_processed}") # ADD THIS LINE - Inspect session state at start
-    st.set_page_config(page_title="Dynamic RAG Chat System (Supabase)", page_icon="🤖", layout="wide")
     init_progress_state()  # Initialize sidebar state
 
     if "messages" not in st.session_state:
