@@ -45,21 +45,24 @@ if not os.path.exists(nltk_data_path):
 
 print(f"NLTK Data Path: {nltk_data_path}") # Debug: Print NLTK data path
 
+# --- NLTK Data Download and Setup (Simplified - Run ONCE at startup) ---
 try:
     nltk.data.find('tokenizers/punkt')
-    print("NLTK punkt data already found.") # Debug: Indicate punkt data found
+    print("NLTK punkt data already found.")
 except LookupError:
-    print("NLTK punkt data not found, downloading...") # Debug: Indicate punkt download attempt
-    nltk.download('punkt', download_dir=nltk_data_path) # Download punkt to local directory
+    print("NLTK punkt data not found, downloading punkt...")
+    nltk.download('punkt', download_dir=nltk_data_path)
 
 try:
-    nltk.data.find('taggers/punkt_tab') # Changed to taggers/punkt_tab to match error message and be consistent (typo in prev response)
-    print("NLTK punkt_tab data already found.") # Debug: Indicate punkt_tab data found
+    nltk.data.find('taggers/punkt_tab')
+    print("NLTK punkt_tab data already found.")
 except LookupError:
-    print("NLTK punkt_tab data not found, downloading...") # Debug: Indicate punkt_tab download attempt
-    nltk.download('punkt_tab', download_dir=nltk_data_path) # Download punkt_tab to local directory
+    print("NLTK punkt_tab data not found, downloading punkt_tab...")
+    nltk.download('punkt_tab', download_dir=nltk_data_path)
 
 os.environ['NLTK_DATA'] = nltk_data_path # Set NLTK_DATA environment variable
+# --- End of Simplified NLTK Setup ---
+
 
 load_dotenv()
 
@@ -285,7 +288,7 @@ async def process_and_store_document(url: str, md: str):
     await asyncio.gather(*insert_tasks)
 
 #############################
-# BFS Link Discovery (optional) (No Changes - corrected session_state already)
+# BFS Link Discovery (optional) (Modified discover_internal_links with Debugging)
 #############################
 async def discover_internal_links(st_session_state, start_urls: List[str], max_depth: int = 3) -> List[str]:
     visited = set()
@@ -306,13 +309,19 @@ async def discover_internal_links(st_session_state, start_urls: List[str], max_d
                 continue
             visited.add(url)
 
+            print(f"discover_internal_links: Dequeued URL: {url}, Depth: {depth}") # Debug: URL dequeued
+
             # BFS approach: just parse links, don't store content
             run_config_instance = get_run_config(st_session_state, with_js=st_session_state.get("use_js_for_crawl", False))
+            print(f"discover_internal_links: Calling crawler.arun for URL: {url}") # Debug: Before crawler.arun
             result = await crawler.arun(url=url, config=run_config_instance)
+            print(f"discover_internal_links: crawler.arun returned for URL: {url}, Success: {result.success}") # Debug: After crawler.arun
+
             if result.success:
                 discovered.add(url)
                 links_dict = getattr(result, "links", {})
                 internal_links = links_dict.get("internal", [])
+                print(f"discover_internal_links: Found {len(internal_links)} internal links on {url}") # Debug: Links found
                 for link_obj in internal_links:
                     href = link_obj.get("href")
                     if href:
@@ -320,7 +329,7 @@ async def discover_internal_links(st_session_state, start_urls: List[str], max_d
                         if abs_url and same_domain(abs_url, url):
                             queue.append((abs_url, depth + 1))
             else:
-                print(f"Link discovery failed: {result.error_message}")
+                print(f"discover_internal_links: Link discovery failed for {url}: {result.error_message}") # Debug: Crawl failure
 
     return list(discovered)
 
@@ -421,7 +430,7 @@ def update_progress():
     st.session_state.progress_placeholder.markdown(content)
 
 #############################
-# Main Streamlit App (Review and Fix Fallback Logic)
+# Main Streamlit App (No Changes - corrected session_state already)
 #############################
 async def main():
     st.set_page_config(page_title="Dynamic RAG Chat System (Supabase)", page_icon="🤖", layout="wide")
