@@ -132,7 +132,7 @@ def extract_reference_snippet(content: str, query: str, snippet_length: int = 25
             return word
         for term in query.split():
             if re.search(re.escape(term), word, flags=re.IGNORECASE):
-                return f'<span style="background-color: yellow;">{word}</span>'
+                return f'<span style="background-color: red;">{word}</span>'
         return word
 
     highlighted = " ".join(highlight_word(w) for w in snippet_to_highlight.split())
