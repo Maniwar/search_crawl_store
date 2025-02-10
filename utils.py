@@ -1,9 +1,9 @@
-import streamlit as st  # ADD THIS LINE!
+import streamlit as st  # ADDED - Import streamlit as st
 import requests
 from urllib.parse import urlparse, urljoin
 from xml.etree import ElementTree
 import asyncio
-from typing import List, Dict, Any, Optional, Set
+from typing import List, Dict, Any, Optional, Set # Corrected typing import to include Set
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMode, RateLimiter, CrawlerMonitor, DisplayMode
 from crawl4ai.async_dispatcher import MemoryAdaptiveDispatcher
 from collections import deque
@@ -14,9 +14,9 @@ import markdown
 import re
 import nltk
 from nltk.tokenize import sent_tokenize
-from datetime import datetime
+from datetime import datetime # Import datetime for timestamp formatting
 
-nltk.download('punkt')
+nltk.download('punkt') # Ensure punkt tokenizer is downloaded in utils.py as well, if needed here.
 
 load_dotenv()
 
@@ -74,9 +74,9 @@ def get_crawler_config(st_session_state) -> CrawlerRunConfig:
         js_snippets=[st_session_state.get("js_click_all", "")], # Example of using JS snippets from session state
     )
     rate_limiter = RateLimiter(
-        base_delay_range=(st.session_state.rate_limiter_base_delay_min, st.session_state.rate_limiter_base_delay_max),
-        max_delay=st.session_state.rate_limiter_max_delay,
-        max_retries=st.session_state.rate_limiter_max_retries
+        base_delay_range=(st_session_state.rate_limiter_base_delay_min, st_session_state.rate_limiter_base_delay_max),
+        max_delay=st_session_state.rate_limiter_max_delay,
+        max_retries=st_session_state.rate_limiter_max_retries
     )
     crawler_config = CrawlerRunConfig(
         browser_config=browser_config,
