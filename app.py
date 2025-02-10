@@ -48,7 +48,7 @@ openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 # --- JS snippet --- (No changes)
 js_click_all = """(async () => { const clickable = document.querySelectorAll("a, button"); for (let el of clickable) { try { el.click(); await new Promise(r => setTimeout(r, 150)); } catch(e) {} } })();"""
 
-# --- Helper Functions --- (No changes - but defined here for app.py scope)
+# --- Helper Functions --- (No changes)
 def normalize_url(u: str) -> str:
     parts = urlparse(u)
     normalized_path = parts.path.rstrip('/') if parts.path != '/' else parts.path
@@ -215,7 +215,12 @@ async def main():
             st.session_state.rate_limiter_max_delay = st.slider("Max Delay (Sec)", 5.0, 45.0, value=st.session_state.rate_limiter_max_delay, step=5.0, format="%.0f")
             st.session_state.rate_limiter_max_retries = st.slider("Max Retries", 1, 4, value=st.session_state.rate_limiter_max_retries, step=1)
             st.subheader("Crawl Rules")
-            st.session_state.check_robots_txt = st.checkbox("Respect robots.txt", value=st.session_state.check_robots_txt, key="check_robots_txt", help="Enable robots.txt compliance (recommended).")
+            st.checkbox(
+                "Respect robots.txt",
+                value=st.session_state.get("check_robots_txt", False), # Corrected line: use .get() for value
+                key="check_robots_txt",
+                help="Enable robots.txt compliance (recommended)."
+            )
             st.session_state.url_include_patterns = st.text_area("Include URLs matching pattern (one per line)", value=st.session_state.url_include_patterns, height=70, key="url_include_patterns", help="Crawl only URLs that match these patterns (leave empty to include all).")
             st.session_state.url_exclude_patterns = st.text_area("Exclude URLs matching pattern (one per line)", value=st.session_state.url_exclude_patterns, height=70, key="url_exclude_patterns", help="Exclude URLs that match these patterns (leave empty to exclude none).")
 
