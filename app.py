@@ -252,8 +252,7 @@ async def crawl_parallel(urls: List[str], max_concurrent: int = 10):
     )
     bc = BrowserConfig(
         headless=True,
-        verbose=False,
-        extra_args=["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox"]
+        verbose=False
     )
     run_conf = get_run_config(with_js=False)
     async with AsyncWebCrawler(config=bc) as crawler:
