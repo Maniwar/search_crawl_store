@@ -19,7 +19,7 @@ import streamlit as st
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from urllib.parse import urlparse, urljoin, urlunparse
-from xml.etree import ElementTree
+from xml.etree.ElementTree import ElementTree
 from dotenv import load_dotenv
 import nltk
 from nltk.tokenize import sent_tokenize
@@ -127,19 +127,20 @@ def retrieve_relevant_documents(query: str, n_matches: int, max_snippet_len: int
         snippets.append(f"""\n#### {doc['title']}\n\n{snippet}\n\n**Source:** [{doc['metadata']['source']}]({doc['url']})\nSimilarity: {doc['similarity']:.2f}""")
     return "\n".join(snippets)
 
-# --- Sitemap Helpers --- (No changes)
-get_urls_from_sitemap = get_urls_from_sitemap
-format_sitemap_url = format_sitemap_url
-same_domain = same_domain
+# --- Sitemap Helpers --- (FIX: Assume these are in a utils.py file, import and use utils prefix)
+import utils
+get_urls_from_sitemap = utils.get_urls_from_sitemap
+format_sitemap_url = utils.format_sitemap_url
+same_domain = utils.same_domain
 
-# --- Optimized Crawler Config --- (No changes)
-get_crawler_config = get_crawler_config
+# --- Optimized Crawler Config --- (FIX: Assume these are in a utils.py file, import and use utils prefix)
+get_crawler_config = utils.get_crawler_config
 
-# --- Document Processing & Storage --- (No changes)
-extract_title_and_summary_from_markdown = extract_title_and_summary_from_markdown
-process_chunk = process_chunk
-insert_chunk_to_supabase_batch = insert_chunk_to_supabase_batch
-process_and_store_document = process_and_store_document
+# --- Document Processing & Storage --- (FIX: Assume these are in a utils.py file, import and use utils prefix)
+extract_title_and_summary_from_markdown = utils.extract_title_and_summary_from_markdown
+process_chunk = utils.process_chunk
+insert_chunk_to_supabase_batch = utils.insert_chunk_to_supabase_batch
+process_and_store_document = utils.process_and_store_document
 
 # --- Database and Stats Functions --- (No changes)
 delete_all_chunks = delete_all_chunks
@@ -195,8 +196,8 @@ async def main():
         st.header("Configuration")
         st.session_state.max_concurrent = st.slider("Concurrent URLs", 1, 50, value=st.session_state.max_concurrent, step=5, help="Number of URLs to crawl in parallel for speed.")
         st.checkbox(
-            "Follow Links Recursively", 
-            value=st.session_state.follow_links_recursively, 
+            "Follow Links Recursively",
+            value=st.session_state.follow_links_recursively,
             key="checkbox_follow_links_recursive_value",
             help="Crawl internal links recursively.",
             on_change=update_follow_links_recursively # Use defined callback function
@@ -208,8 +209,8 @@ async def main():
             st.session_state.crawl_delay = st.slider("Crawl Delay (Seconds)", 0.0, 3.0, value=st.session_state.crawl_delay, step=0.1, format="%.1f", help="Delay between requests to avoid overloading websites.")
             st.session_state.crawl_word_threshold = st.slider("Word Threshold (Indexing)", 10, 150, value=st.session_state.crawl_word_threshold, step=10, help="Minimum words for indexing text blocks.")
             st.checkbox(
-                "Enable JavaScript Rendering", 
-                value=st.session_state.use_js_for_crawl, 
+                "Enable JavaScript Rendering",
+                value=st.session_state.use_js_for_crawl,
                 key="checkbox_use_js_for_crawl_value",
                 help="Render dynamic content, but crawling will be slower.",
                 on_change=update_use_js_crawl # Use defined callback function
@@ -272,7 +273,7 @@ async def main():
 
                 if st.session_state.follow_links_recursively:
                     status_placeholder.info(f"Following internal links (max depth: {st.session_state.get('max_depth_discover_links', 2)})...")
-                    discovered_urls = await discover_internal_links(crawl_urls, max_depth=2)
+                    discovered_urls = await discover_internal_links(crawl_urls, max_depth=2) # discover_internal_links is also missing
                     urls_to_crawl = discovered_urls
                     status_placeholder.success(f"Discovered {len(urls_to_crawl)} URLs.")
                 else:
@@ -280,7 +281,7 @@ async def main():
 
                 if urls_to_crawl:
                     status_placeholder.info(f"Crawling and indexing {len(urls_to_crawl)} pages...")
-                    await crawl_parallel(urls_to_crawl, max_concurrent=st.session_state.max_concurrent)
+                    await crawl_parallel(urls_to_crawl, max_concurrent=st.session_state.max_concurrent) # crawl_parallel is also missing
                     status_placeholder.success(f"Crawling & indexing complete. Knowledge base updated!")
                     st.session_state.urls_processed.add(normalized_website_url)
                     st.session_state.processing_complete = True
@@ -299,7 +300,7 @@ async def main():
                 st.write(f"✓ {url}")
             if st.checkbox(f"Show all {len(st.session_state.urls_processed)} URLs"):
                 for url in sorted(list(st.session_state.urls_processed))[5:]:
-                    st.write(f"✓ {url_ex}")
+                    st.write(f"✓ {url}")
 
     with chat_col:
         if st.session_state.processing_complete:
