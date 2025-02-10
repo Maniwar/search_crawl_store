@@ -129,28 +129,19 @@ def retrieve_relevant_documents(query: str, n_matches: int, max_snippet_len: int
 
 # --- Sitemap Helpers ---
 import utils
-get_urls_from_sitemap = utils.get_urls_from_sitemap
-format_sitemap_url = utils.format_sitemap_url
-same_domain = utils.same_domain
+from utils import get_urls_from_sitemap, format_sitemap_url, same_domain
 
 # --- Optimized Crawler Config ---
-get_crawler_config = utils.get_crawler_config
+from utils import get_crawler_config
 
 # --- Document Processing & Storage ---
-extract_title_and_summary_from_markdown = utils.extract_title_and_summary_from_markdown
-process_chunk = utils.process_chunk
-insert_chunk_to_supabase_batch = utils.insert_chunk_to_supabase_batch
-process_and_store_document = utils.process_and_store_document
+from utils import extract_title_and_summary_from_markdown, process_chunk, insert_chunk_to_supabase_batch, process_and_store_document
 
 # --- Database and Stats Functions --- (No changes)
-delete_all_chunks = delete_all_chunks
-get_db_stats = get_db_stats
+from utils import delete_all_chunks, get_db_stats
 
 # --- UI Progress functions --- (No changes)
-init_progress_state = init_progress_state
-add_processing_url = add_processing_url
-remove_processing_url = remove_processing_url
-update_progress = update_progress
+from utils import init_progress_state, add_processing_url, remove_processing_url, update_progress
 
 # --- Callback functions for UI elements ---
 def update_use_js_crawl():
