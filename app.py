@@ -1,4 +1,3 @@
-# fix Sitemap error: not well-formed (invalid token): line 313, column 37 import nest_asyncio
 import nest_asyncio
 nest_asyncio.apply()
 import os
@@ -304,7 +303,7 @@ async def discover_internal_links(start_urls: List[str], max_depth: int = 3) -> 
                         if abs_url and same_domain(abs_url, url):
                             queue.append((abs_url, depth + 1))
             else:
-                print(f"Link discovery failed: {result.error_message}")
+                print(f"Link discovery failed: {result.error_message} for URL: {url}") # Added URL to error message
 
     return list(discovered)
 
@@ -312,6 +311,10 @@ async def discover_internal_links(start_urls: List[str], max_depth: int = 3) -> 
 # Parallel Crawl (arun_many)
 #############################
 async def crawl_parallel(urls: List[str], max_concurrent: int = 10):
+    if not urls: # Efficient fallback: handle empty URL list
+        print("Warning: crawl_parallel received an empty URL list. Nothing to crawl.")
+        return
+
     dispatcher = MemoryAdaptiveDispatcher(
         memory_threshold_percent=90.0,
         check_interval=1.0,
@@ -484,12 +487,17 @@ async def main():
                     fu = pv
                     found = get_urls_from_sitemap(fu)
                     if not found:
-                        found = [url_input]
+                        print(f"Sitemap not found or empty at {fu}. Falling back to input URL.") # Explicit fallback message
+                        found = [url_input] # Efficient fallback: process input URL directly
+
+                    print(f"Found URLs from sitemap (or fallback): {found}") # Debug print
 
                     if follow_links_recursively:
                         discovered = await discover_internal_links(found, max_depth=9)
                     else:
-                        discovered = found
+                        discovered = found # If not recursive, just use the initial found URLs
+
+                    print(f"Discovered URLs after link discovery: {discovered}") # Debug print
 
                     await crawl_parallel(discovered, max_concurrent=max_concurrent)
 
