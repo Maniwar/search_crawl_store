@@ -308,6 +308,35 @@ def get_db_stats():
         return None
 
 # --- Main Streamlit App ---
+# --- UI Progress Widget (Sidebar) ---
+def init_progress_state():
+    if "processing_urls" not in st.session_state:
+        st.session_state.processing_urls = []
+    if "progress_placeholder" not in st.session_state:
+        st.session_state.progress_placeholder = st.sidebar.empty()
+
+
+def add_processing_url(url: str):
+    norm_url = normalize_url(url)
+    if norm_url not in st.session_state.processing_urls:
+        st.session_state.processing_urls.append(norm_url)
+    update_progress()
+
+
+def remove_processing_url(url: str):
+    norm_url = normalize_url(url)
+    if norm_url in st.session_state.processing_urls:
+        st.session_state.processing_urls.remove(norm_url)
+    update_progress()
+
+
+def update_progress():
+    unique_urls = list(dict.fromkeys(st.session_state.get("processing_urls", [])))
+    content = "### Currently Processing URLs:
+" + "
+".join(f"- {url}" for url in unique_urls)
+    st.session_state.progress_placeholder.markdown(content)
+
 async def main():
     st.set_page_config(page_title="Dynamic RAG Chat System (Supabase)", page_icon="🤖", layout="wide")
     init_progress_state()  # Initialize sidebar state
