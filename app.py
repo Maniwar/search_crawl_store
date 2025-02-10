@@ -48,7 +48,9 @@ if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY or not OPENAI_API_KEY:
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
-# --- Define JS snippet (if needed) ---
+#############################
+# Install JS snippet (if needed)
+#############################
 js_click_all = """
 (async () => {
     const clickable = document.querySelectorAll("a, button");
@@ -129,15 +131,36 @@ def extract_reference_snippet(content: str, query: str, snippet_length: int = 30
     highlighted = " ".join(highlight_word(w) for w in snippet.split())
     return highlighted
 
-def retrieve_relevant_documentation(query: str) -> str:
+#############################
+# Retrieve multiple matches
+#############################
+def retrieve_relevant_documents(query: str, n_matches: int = 5, max_snippet_len: int = 500) -> str:
+    """
+    Retrieve multiple top documents from Supabase and build a combined context snippet.
+    The `max_snippet_len` controls how much text to extract for each doc.
+    """
+    # 1. Get embedding for the query
     e = asyncio.run(get_embedding(query))
-    r = supabase.rpc("match_documents", {"query_embedding": e, "match_count": 5}).execute()
-    d = r.data
-    if not d:
+
+    # 2. Supabase RPC to retrieve top N matches
+    r = supabase.rpc("match_documents", {
+        "query_embedding": e,
+        "match_count": n_matches
+    }).execute()
+
+    docs = r.data
+    if not docs:
         return "No relevant documentation found."
-    best = max(d, key=lambda x: x.get("similarity", 0))
-    snippet = extract_reference_snippet(best["content"], query)
-    return f"\n# {best['title']}\n\n{snippet}\n...\nSource: {best['url']}\nSimilarity: {best['similarity']:.3f}\n"
+
+    # 3. Combine them into one big snippet
+    combined_snippets = []
+    for doc in docs:
+        content_slice = doc["content"][:max_snippet_len]  # limit snippet length
+        snippet = extract_reference_snippet(content_slice, query)
+        snippet_block = f"""\n# {doc['title']}\n\n{snippet}\n...\nSource: {doc['url']}\nSimilarity: {doc['similarity']:.3f}\n""".strip()
+        combined_snippets.append(snippet_block)
+
+    return "\n".join(combined_snippets)
 
 #############################
 # Sitemap Helpers
@@ -166,11 +189,9 @@ def format_sitemap_url(u: str) -> str:
     return u
 
 #############################
-# Code from Crawl4AI Docs
+# Best practice config from docs
 #############################
-
 def get_run_config(with_js: bool = False) -> CrawlerRunConfig:
-    # BEST PRACTICE from docs: We can also do check_robots_txt=True if desired
     kwargs = {
         "cache_mode": CacheMode.BYPASS,
         "stream": False,
@@ -179,7 +200,7 @@ def get_run_config(with_js: bool = False) -> CrawlerRunConfig:
         "delay_before_return_html": 1.0,
         "excluded_tags": ["header", "footer", "nav", "aside"],
         "word_count_threshold": 50,
-        # e.g. "check_robots_txt": True,
+        # You could also do "check_robots_txt": True,
     }
     if with_js:
         kwargs["js_code"] = [js_click_all]
@@ -194,6 +215,9 @@ def extract_title_and_summary_from_markdown(md: str) -> Dict[str, str]:
             break
     return {"title": title, "summary": md}
 
+#############################
+# Processing & Storing docs
+#############################
 async def process_chunk(chunk: str, num: int, url: str) -> Dict[str, Any]:
     ts = extract_title_and_summary_from_markdown(chunk)
     embedding = await get_embedding(ts["summary"])
@@ -227,7 +251,7 @@ async def process_and_store_document(url: str, md: str):
     await asyncio.gather(*insert_tasks)
 
 #############################
-# BFS Link Discovery (optional)
+# BFS Link Discovery (Optional)
 #############################
 async def discover_internal_links(start_urls: List[str], max_depth: int = 3) -> List[str]:
     visited = set()
@@ -248,7 +272,7 @@ async def discover_internal_links(start_urls: List[str], max_depth: int = 3) -> 
                 continue
             visited.add(url)
 
-            # BFS approach: just parse links, don't store content
+            # BFS approach: just parse links, no storing
             result = await crawler.arun(url=url, config=run_conf)
             if result.success:
                 discovered.add(url)
@@ -269,7 +293,6 @@ async def discover_internal_links(start_urls: List[str], max_depth: int = 3) -> 
 # Parallel Crawl (arun_many)
 #############################
 async def crawl_parallel(urls: List[str], max_concurrent: int = 10):
-    # Best practice: MemoryAdaptiveDispatcher with RateLimiter + CrawlerMonitor
     dispatcher = MemoryAdaptiveDispatcher(
         memory_threshold_percent=90.0,
         check_interval=1.0,
@@ -411,7 +434,6 @@ async def main():
         st.subheader("Add Content to RAG System")
         st.write("Enter a website URL to process.")
         url_input = st.text_input("Website URL", key="url_input", placeholder="example.com or https://example.com")
-        # Attempt to guess a sitemap if user didn't provide
         if url_input:
             parsed = urlparse(url_input)
             if "sitemap.xml" in url_input:
@@ -439,19 +461,17 @@ async def main():
             if url_input not in st.session_state.urls_processed:
                 st.session_state.is_processing = True
                 with st.spinner("Discovery & Parallel Crawl..."):
-                    # Phase 0: try to get sitemap or fallback
-                    fu = pv  # from above
+                    # Try to parse sitemap or fallback
+                    fu = pv
                     found = get_urls_from_sitemap(fu)
                     if not found:
                         found = [url_input]
 
-                    # BFS link discovery if user wants recursion
                     if follow_links_recursively:
                         discovered = await discover_internal_links(found, max_depth=9)
                     else:
                         discovered = found
 
-                    # Now do a parallel crawl in batch
                     await crawl_parallel(discovered, max_concurrent=max_concurrent)
 
                 st.session_state.urls_processed.update(discovered)
@@ -481,13 +501,15 @@ async def main():
                 with st.chat_message(role):
                     st.markdown(m["content"], unsafe_allow_html=True)
 
+            # When user enters a question
             user_query = st.chat_input("Ask a question about the processed content...")
             if user_query:
                 st.session_state.messages.append({"role": "user", "content": user_query})
                 with st.chat_message("user"):
                     st.markdown(user_query, unsafe_allow_html=True)
-                dr = retrieve_relevant_documentation(user_query)
-                sys = "You have access to the following context:\n" + dr + "\nAnswer the question."
+                # Retrieve multiple docs for a better answer
+                combined_context = retrieve_relevant_documents(user_query, n_matches=5, max_snippet_len=600)
+                sys = ("You have access to the following context:\n" + combined_context + "\nAnswer the question.")
                 msgs = [
                     {"role": "system", "content": sys},
                     {"role": "user", "content": user_query}
@@ -502,7 +524,7 @@ async def main():
                     with st.chat_message("assistant"):
                         st.markdown(a, unsafe_allow_html=True)
                         with st.expander("References"):
-                            st.markdown(dr, unsafe_allow_html=True)
+                            st.markdown(combined_context, unsafe_allow_html=True)
                 except Exception as e:
                     st.session_state.messages.append({"role": "assistant", "content": f"Error: {e}"})
                     with st.chat_message("assistant"):
