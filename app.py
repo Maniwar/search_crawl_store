@@ -4,11 +4,11 @@ import os
 import subprocess
 import sys
 
+# Install Playwright without requiring sudo.
 def install_playwright():
     subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
 
 install_playwright()
-
 
 import asyncio
 import json
@@ -34,6 +34,7 @@ from crawl4ai import (
     DisplayMode
 )
 from crawl4ai.async_dispatcher import MemoryAdaptiveDispatcher
+from collections import deque
 
 load_dotenv()
 
@@ -60,7 +61,9 @@ js_click_all = """
 })();
 """
 
-# --- Helper Functions ---
+#############################
+# Helper Functions
+#############################
 
 def normalize_url(u: str) -> str:
     """
@@ -87,6 +90,9 @@ def chunk_text(t: str, max_chars: int = 5000) -> List[str]:
         chunks.append(current_chunk.strip())
     return chunks
 
+#############################
+# OpenAI Embedding
+#############################
 async def get_embedding(text: str) -> List[float]:
     try:
         r = await openai_client.embeddings.create(
@@ -111,6 +117,7 @@ def extract_reference_snippet(content: str, query: str, snippet_length: int = 30
         snippet = content[start:start + snippet_length]
     else:
         snippet = content[:snippet_length]
+
     def highlight_word(word):
         if word.lower().startswith("http"):
             return word
@@ -118,6 +125,7 @@ def extract_reference_snippet(content: str, query: str, snippet_length: int = 30
             if re.search(re.escape(term), word, flags=re.IGNORECASE):
                 return f'<span style="background-color: yellow;">{word}</span>'
         return word
+
     highlighted = " ".join(highlight_word(w) for w in snippet.split())
     return highlighted
 
@@ -130,6 +138,10 @@ def retrieve_relevant_documentation(query: str) -> str:
     best = max(d, key=lambda x: x.get("similarity", 0))
     snippet = extract_reference_snippet(best["content"], query)
     return f"\n# {best['title']}\n\n{snippet}\n...\nSource: {best['url']}\nSimilarity: {best['similarity']:.3f}\n"
+
+#############################
+# Sitemap Helpers
+#############################
 
 def get_urls_from_sitemap(u: str) -> List[str]:
     try:
@@ -153,7 +165,12 @@ def format_sitemap_url(u: str) -> str:
         return f"{u.rstrip('/')}" + "/sitemap.xml"
     return u
 
+#############################
+# Code from Crawl4AI Docs
+#############################
+
 def get_run_config(with_js: bool = False) -> CrawlerRunConfig:
+    # BEST PRACTICE from docs: We can also do check_robots_txt=True if desired
     kwargs = {
         "cache_mode": CacheMode.BYPASS,
         "stream": False,
@@ -161,7 +178,8 @@ def get_run_config(with_js: bool = False) -> CrawlerRunConfig:
         "wait_for_images": True,
         "delay_before_return_html": 1.0,
         "excluded_tags": ["header", "footer", "nav", "aside"],
-        "word_count_threshold": 50
+        "word_count_threshold": 50,
+        # e.g. "check_robots_txt": True,
     }
     if with_js:
         kwargs["js_code"] = [js_click_all]
@@ -208,33 +226,50 @@ async def process_and_store_document(url: str, md: str):
     insert_tasks = [insert_chunk_to_supabase(item) for item in processed_chunks]
     await asyncio.gather(*insert_tasks)
 
-# --- UI Progress Widget (Sidebar) ---
+#############################
+# BFS Link Discovery (optional)
+#############################
+async def discover_internal_links(start_urls: List[str], max_depth: int = 3) -> List[str]:
+    visited = set()
+    discovered = set()
+    queue = deque((url, 0) for url in start_urls)
 
-def init_progress_state():
-    if "processing_urls" not in st.session_state:
-        st.session_state.processing_urls = []
-    if "progress_placeholder" not in st.session_state:
-        st.session_state.progress_placeholder = st.sidebar.empty()
+    bc = BrowserConfig(
+        headless=True,
+        verbose=False,
+        extra_args=["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox"]
+    )
+    run_conf = get_run_config(with_js=False)
 
-def add_processing_url(url: str):
-    norm_url = normalize_url(url)
-    if norm_url not in st.session_state.processing_urls:
-        st.session_state.processing_urls.append(norm_url)
-    update_progress()
+    async with AsyncWebCrawler(config=bc) as crawler:
+        while queue:
+            url, depth = queue.popleft()
+            if url in visited or depth > max_depth:
+                continue
+            visited.add(url)
 
-def remove_processing_url(url: str):
-    norm_url = normalize_url(url)
-    if norm_url in st.session_state.processing_urls:
-        st.session_state.processing_urls.remove(norm_url)
-    update_progress()
+            # BFS approach: just parse links, don't store content
+            result = await crawler.arun(url=url, config=run_conf)
+            if result.success:
+                discovered.add(url)
+                links_dict = getattr(result, "links", {})
+                internal_links = links_dict.get("internal", [])
+                for link_obj in internal_links:
+                    href = link_obj.get("href")
+                    if href:
+                        abs_url = urljoin(url, href)
+                        if abs_url and same_domain(abs_url, url):
+                            queue.append((abs_url, depth + 1))
+            else:
+                print(f"Link discovery failed: {result.error_message}")
 
-def update_progress():
-    unique_urls = list(dict.fromkeys(st.session_state.get("processing_urls", [])))
-    content = "### Currently Processing URLs:\n" + "\n".join(f"- {url}" for url in unique_urls)
-    st.session_state.progress_placeholder.markdown(content)
+    return list(discovered)
 
-# --- Advanced Parallel Crawling ---
+#############################
+# Parallel Crawl (arun_many)
+#############################
 async def crawl_parallel(urls: List[str], max_concurrent: int = 10):
+    # Best practice: MemoryAdaptiveDispatcher with RateLimiter + CrawlerMonitor
     dispatcher = MemoryAdaptiveDispatcher(
         memory_threshold_percent=90.0,
         check_interval=1.0,
@@ -252,9 +287,11 @@ async def crawl_parallel(urls: List[str], max_concurrent: int = 10):
     )
     bc = BrowserConfig(
         headless=True,
-        verbose=False
+        verbose=False,
+        extra_args=["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox"]
     )
     run_conf = get_run_config(with_js=False)
+
     async with AsyncWebCrawler(config=bc) as crawler:
         results = await crawler.arun_many(
             urls=urls,
@@ -268,54 +305,9 @@ async def crawl_parallel(urls: List[str], max_concurrent: int = 10):
             else:
                 print(f"Failed crawling {r.url}: {r.error_message}")
 
-# --- Recursive Crawl with Global Concurrency Limit ---
-async def recursive_crawl(url: str, max_depth: int = 9, current_depth: int = 0, 
-                          processed: set = None, sema: asyncio.Semaphore = None):
-    if processed is None:
-        processed = set()
-    if sema is None:
-        sema = asyncio.Semaphore(10)  # Global concurrency limit of 10
-    if current_depth > max_depth or url in processed:
-        return
-    processed.add(url)
-    norm_url = normalize_url(url)
-    add_processing_url(norm_url)
-    try:
-        await asyncio.sleep(1)
-        async with sema:
-            dispatcher = MemoryAdaptiveDispatcher(
-                memory_threshold_percent=85.0,
-                check_interval=1.0,
-                max_session_permit=5,
-                monitor=None
-            )
-            bc = BrowserConfig(
-                headless=True,
-                verbose=False,
-                extra_args=["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox"]
-            )
-            run_conf = get_run_config(with_js=False)
-            async with AsyncWebCrawler(config=bc) as crawler:
-                result = await crawler.arun(url=url, config=run_conf)
-                if result.success:
-                    print(f"Crawled: {url} (depth {current_depth})")
-                    md = result.markdown_v2.raw_markdown
-                    await process_and_store_document(url, md)
-                    links_dict = getattr(result, "links", {})
-                    internal_links = links_dict.get("internal", [])
-                    tasks = []
-                    for link in internal_links:
-                        href = link.get("href")
-                        absolute_url = urljoin(url, href) if href else None
-                        if absolute_url and same_domain(absolute_url, url) and absolute_url not in processed:
-                            tasks.append(recursive_crawl(absolute_url, max_depth, current_depth + 1, processed, sema))
-                    if tasks:
-                        await asyncio.gather(*tasks)
-                else:
-                    print(f"Error crawling {url}: {result.error_message}")
-    finally:
-        remove_processing_url(norm_url)
-
+#############################
+# DB & Stats
+#############################
 def delete_all_chunks():
     supabase.table("rag_chunks").delete().neq("id", "").execute()
 
@@ -341,11 +333,42 @@ def get_db_stats():
         print(f"DB Stats error: {e}")
         return None
 
-# --- Main Streamlit App ---
+#############################
+# UI Progress
+#############################
+def init_progress_state():
+    if "processing_urls" not in st.session_state:
+        st.session_state.processing_urls = []
+    if "progress_placeholder" not in st.session_state:
+        st.session_state.progress_placeholder = st.sidebar.empty()
+
+
+def add_processing_url(url: str):
+    norm_url = normalize_url(url)
+    if norm_url not in st.session_state.processing_urls:
+        st.session_state.processing_urls.append(norm_url)
+    update_progress()
+
+
+def remove_processing_url(url: str):
+    norm_url = normalize_url(url)
+    if norm_url in st.session_state.processing_urls:
+        st.session_state.processing_urls.remove(norm_url)
+    update_progress()
+
+
+def update_progress():
+    unique_urls = list(dict.fromkeys(st.session_state.get("processing_urls", [])))
+    content = "### Currently Processing URLs:\n" + "\n".join(f"- {url}" for url in unique_urls)
+    st.session_state.progress_placeholder.markdown(content)
+
+#############################
+# Main Streamlit App
+#############################
 async def main():
     st.set_page_config(page_title="Dynamic RAG Chat System (Supabase)", page_icon="🤖", layout="wide")
-    init_progress_state()  # Initialize sidebar state
-    
+    init_progress_state()
+
     if "messages" not in st.session_state:
         st.session_state.messages = []
     if "processing_complete" not in st.session_state:
@@ -356,15 +379,15 @@ async def main():
         st.session_state.is_processing = False
     if "suggested_questions" not in st.session_state:
         st.session_state.suggested_questions = None
-    
-    update_progress()  # Initial update
-    
+
+    update_progress()
+
     st.title("Dynamic RAG Chat System (Supabase)")
     db_stats = get_db_stats()
     if db_stats and db_stats["doc_count"] > 0:
         st.session_state.processing_complete = True
         st.session_state.urls_processed = set(db_stats["urls"])
-    
+
     if db_stats and db_stats["doc_count"] > 0:
         st.success("💡 System is ready with existing knowledge base (Supabase)!")
         with st.expander("Knowledge Base Information", expanded=True):
@@ -379,25 +402,26 @@ async def main():
 """)
     else:
         st.info("👋 Welcome! Start by adding a website to create your knowledge base.")
-    
+
     max_concurrent = st.slider("Max concurrent URLs", min_value=1, max_value=50, value=10)
     follow_links_recursively = st.checkbox("Follow links recursively", value=True)
-    
+
     ic, cc = st.columns([1, 2])
     with ic:
         st.subheader("Add Content to RAG System")
         st.write("Enter a website URL to process.")
         url_input = st.text_input("Website URL", key="url_input", placeholder="example.com or https://example.com")
+        # Attempt to guess a sitemap if user didn't provide
         if url_input:
+            parsed = urlparse(url_input)
             if "sitemap.xml" in url_input:
                 pv = url_input
+            elif parsed.path in ("", "/"):
+                pv = f"{url_input.rstrip('/')}" + "/sitemap.xml"
             else:
-                parsed = urlparse(url_input)
-                if parsed.path in ("", "/"):
-                    pv = f"{url_input.rstrip('/')}" + "/sitemap.xml"
-                else:
-                    pv = url_input
+                pv = url_input
             st.caption(f"Will try: {pv}")
+
         c1, c2 = st.columns(2)
         with c1:
             pb = st.button("Process URL", disabled=st.session_state.is_processing)
@@ -410,28 +434,33 @@ async def main():
                 st.session_state.suggested_questions = None
                 st.success("Database cleared successfully!")
                 st.rerun()
+
         if pb and url_input:
             if url_input not in st.session_state.urls_processed:
                 st.session_state.is_processing = True
-                with st.spinner("Crawling & Processing..."):
-                    if "sitemap.xml" in url_input:
-                        found = get_urls_from_sitemap(url_input)
-                    else:
-                        fu = format_sitemap_url(url_input)
-                        found = get_urls_from_sitemap(fu)
-                        if not found:
-                            found = [url_input]
-                    sema = asyncio.Semaphore(max_concurrent)
+                with st.spinner("Discovery & Parallel Crawl..."):
+                    # Phase 0: try to get sitemap or fallback
+                    fu = pv  # from above
+                    found = get_urls_from_sitemap(fu)
+                    if not found:
+                        found = [url_input]
+
+                    # BFS link discovery if user wants recursion
                     if follow_links_recursively:
-                        await recursive_crawl(found[0], max_depth=9, sema=sema)
+                        discovered = await discover_internal_links(found, max_depth=9)
                     else:
-                        await crawl_parallel(found, max_concurrent=max_concurrent)
-                st.session_state.urls_processed.add(url_input)
+                        discovered = found
+
+                    # Now do a parallel crawl in batch
+                    await crawl_parallel(discovered, max_concurrent=max_concurrent)
+
+                st.session_state.urls_processed.update(discovered)
                 st.session_state.processing_complete = True
                 st.session_state.is_processing = False
                 st.rerun()
             else:
                 st.warning("This URL has already been processed!")
+
         if st.session_state.urls_processed:
             st.subheader("Processed URLs:")
             up = list(st.session_state.urls_processed)
@@ -443,6 +472,7 @@ async def main():
                 with st.expander("Show all URLs"):
                     for uxx in up[3:]:
                         st.write(f"✓ {uxx}")
+
     with cc:
         if st.session_state.processing_complete:
             st.subheader("Chat Interface")
@@ -450,6 +480,7 @@ async def main():
                 role = "user" if m.get("role") == "user" else "assistant"
                 with st.chat_message(role):
                     st.markdown(m["content"], unsafe_allow_html=True)
+
             user_query = st.chat_input("Ask a question about the processed content...")
             if user_query:
                 st.session_state.messages.append({"role": "user", "content": user_query})
@@ -476,11 +507,13 @@ async def main():
                     st.session_state.messages.append({"role": "assistant", "content": f"Error: {e}"})
                     with st.chat_message("assistant"):
                         st.markdown(f"Error: {e}", unsafe_allow_html=True)
+
             if st.button("Clear Chat History", type="secondary"):
                 st.session_state.messages = []
                 st.rerun()
         else:
             st.info("Please process a URL first to start chatting!")
+
     st.markdown("---")
     if db_stats and db_stats["doc_count"] > 0:
         st.markdown(f"System Status: 🟢 Ready with {db_stats['doc_count']} documents from {len(db_stats['domains'])} sources")
