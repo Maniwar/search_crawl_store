@@ -112,7 +112,7 @@ def chunk_text(t: str, max_chars: int = 3800) -> List[str]: # Reduced chunk size
     return chunks
 
 #############################
-# OpenAI Embedding (Modified extract_reference_snippet - Highlight color changed to red)
+# OpenAI Embedding (Modified extract_reference_snippet) - No Changes
 #############################
 async def get_embedding(text: str) -> List[float]: # No change
     try:
@@ -527,11 +527,9 @@ async def main():
             for x in up[:3]:
                 st.write(f"✓ {x}")
             remaining = len(up) - 3
-            if remaining > 0:
-                st.write(f"_...and {remaining} more_")
-                with st.expander("Show all URLs"):
-                    for uxx in up[3:]:
-                        st.write(f"✓ {uxx}")
+            if st.checkbox(f"Show all {len(up)} URLs"):
+                for uxx in up[3:]:
+                    st.write(f"✓ {uxx}")
 
     with cc:
         if st.session_state.processing_complete:
@@ -575,8 +573,9 @@ async def main():
             st.info("Please process a URL first to start chatting!")
 
     st.markdown("---")
+    db_stats = get_db_stats() # Get db_stats here to have it available for status display
     if db_stats and db_stats["doc_count"] > 0:
-        st.markdown(f"System Status: 🟢 Ready | **Docs:** {status_display_final['doc_count']} | **Sources:** {len(db_stats['domains'])}")
+        st.markdown(f"**Status:** 🟢 Ready | **Docs:** {db_stats['doc_count']} | **Sources:** {len(db_stats['domains'])}") # Use db_stats here
     else:
         st.markdown("**Status:** 🟡 Waiting for content")
 
