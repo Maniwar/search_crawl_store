@@ -17,7 +17,7 @@ import re
 import streamlit as st
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional # Keep Optional import
-from urllib.parse import urlparse, urljoin, urlunparse
+from urllib.parse import urlparse, urljoin, urlunparse, unquote # Import unquote
 from xml.etree import ElementTree
 from dotenv import load_dotenv
 import nltk
@@ -71,12 +71,16 @@ js_click_all = """
 #############################
 
 def normalize_url(u: str) -> str:
+    """
+    Normalize a URL by lowercasing the scheme and netloc,
+    and stripping any trailing slash (except for the root path).
+    """
     parts = urlparse(u)
     normalized_path = parts.path.rstrip('/') if parts.path != '/' else parts.path
     normalized = parts._replace(scheme=parts.scheme.lower(), netloc=parts.netloc.lower(), path=normalized_path)
     return urlunparse(normalized)
 
-def chunk_text(t: str, max_chars: int = 5000) -> List[str]:
+def chunk_text(t: str, max_chars: int = 3800) -> List[str]: # Reduced chunk size for potentially better snippets
     paragraphs = t.split("\n\n")
     chunks = []
     current_chunk = ""
@@ -132,7 +136,7 @@ def extract_reference_snippet(content: str, query: str, snippet_length: int = 25
             return word
         for term in query.split():
             if re.search(re.escape(term), word, flags=re.IGNORECASE):
-                return f'<span style="background-color: red;">{word}</span>'
+                return f'<span style="background-color: yellow;">{word}</span>'
         return word
 
     highlighted = " ".join(highlight_word(w) for w in snippet_to_highlight.split())
@@ -149,7 +153,9 @@ def retrieve_relevant_documentation(query: str, n_matches: int = 3, max_snippet_
     for doc in d[:n_matches]: # Use top n_matches documents
         content_slice = doc["content"][:max_snippet_len] # Slice content for snippet extraction
         snippet = extract_reference_snippet(content_slice, query, max_snippet_len // 2) # Extract snippet
-        snippets.append(f"""\n#### {doc['title']}\n\n{snippet}\n\n**Source:** [{doc['metadata']['source']}]({doc['url']})\nSimilarity: {doc['similarity']:.2f}""") # Format snippet
+        raw_url = doc['url'] # Get raw URL from doc
+        cleaned_url = normalize_url(unquote(raw_url)) # Clean and normalize URL
+        snippets.append(f"""\n#### {doc['title']}\n\n{snippet}\n\n**Source:** [{doc['metadata']['source']}]({cleaned_url})\nSimilarity: {doc['similarity']:.2f}""") # Use cleaned_url
 
     return "\n".join(snippets) # Return combined snippets
 
@@ -282,13 +288,13 @@ async def discover_internal_links(st_session_state, start_urls: List[str], max_d
 #############################
 # Parallel Crawl (arun_many) (No Changes - corrected session_state already)
 #############################
-async def crawl_parallel(st_session_state, urls: List[str], max_concurrent: int = 10, use_js: bool = False): # Pass use_js
+async def crawl_parallel(st_session_state, urls: List[str], max_concurrent: int = 10, use_js: bool = False):
     dispatcher = MemoryAdaptiveDispatcher(
         memory_threshold_percent=90.0,
         check_interval=1.0,
         max_session_permit=max_concurrent,
         rate_limiter=RateLimiter(
-            base_delay=(st_session_state.get("rate_limiter_base_delay_min", 1.0), st.session_state.get("rate_limiter_base_delay_max", 2.0)),
+            base_delay=(st_session_state.get("rate_limiter_base_delay_min", 1.0), st_session_state.get("rate_limiter_base_delay_max", 2.0)),
             max_delay=st.session_state.get("rate_limiter_max_delay", 30.0),
             max_retries=st.session_state.get("rate_limiter_max_retries", 2),
             rate_limit_codes=[429, 503]
@@ -303,7 +309,7 @@ async def crawl_parallel(st_session_state, urls: List[str], max_concurrent: int 
         verbose=False,
         extra_args=["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox"]
     )
-    run_conf = get_run_config(st_session_state, with_js=use_js) # Pass use_js to get_run_config
+    run_conf = get_run_config(st_session_state, with_js=use_js)
 
     async with AsyncWebCrawler(config=bc) as crawler:
         results = await crawler.arun_many(
@@ -545,7 +551,7 @@ async def main():
     if db_stats and db_stats["doc_count"] > 0:
         st.markdown(f"System Status: 🟢 Ready with {db_stats['doc_count']} documents from {len(db_stats['domains'])}")
     else:
-        st.markdown("System Status: 🟡 Waiting for content")
+        st.markdown("**Status:** 🟡 Waiting for content")
 
 if __name__ == "__main__":
     asyncio.run(main())
