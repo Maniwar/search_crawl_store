@@ -211,6 +211,7 @@ async def process_and_store_document(url: str, md: str):
 
 # --- Discovery BFS (One pass to gather all internal links) ---
 async def discover_internal_links(start_urls: List[str], max_depth: int = 3) -> List[str]:
+    from collections import deque
     visited = set()
     discovered = set()
     queue = deque((url, 0) for url in start_urls)
@@ -332,9 +333,7 @@ def remove_processing_url(url: str):
 
 def update_progress():
     unique_urls = list(dict.fromkeys(st.session_state.get("processing_urls", [])))
-    content = "### Currently Processing URLs:
-" + "
-".join(f"- {url}" for url in unique_urls)
+    content = "### Currently Processing URLs:\n" + "\n".join(f"- {url}" for url in unique_urls)
     st.session_state.progress_placeholder.markdown(content)
 
 async def main():
