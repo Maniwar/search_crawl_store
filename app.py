@@ -1,4 +1,5 @@
-fix Sitemap error: not well-formed (invalid token): line 313, column 37 import nest_asyncio
+# fix Sitemap error: not well-formed (invalid token): line 313, column 37 import nest_asyncio
+import nest_asyncio
 nest_asyncio.apply()
 import os
 import subprocess
