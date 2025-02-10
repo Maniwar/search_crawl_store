@@ -48,7 +48,7 @@ openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 # --- JS snippet --- (No changes)
 js_click_all = """(async () => { const clickable = document.querySelectorAll("a, button"); for (let el of clickable) { try { el.click(); await new Promise(r => setTimeout(r, 150)); } catch(e) {} } })();"""
 
-# --- Helper Functions --- (No changes)
+# --- Helper Functions --- (No changes - but defined here for app.py scope)
 def normalize_url(u: str) -> str:
     parts = urlparse(u)
     normalized_path = parts.path.rstrip('/') if parts.path != '/' else parts.path
@@ -142,6 +142,7 @@ from utils import delete_all_chunks, get_db_stats
 
 # --- UI Progress functions --- (No changes)
 from utils import init_progress_state, add_processing_url, remove_processing_url, update_progress
+from utils import discover_internal_links, crawl_parallel # Ensure these are imported from utils
 
 # --- Callback functions for UI elements ---
 def update_use_js_crawl():
@@ -163,7 +164,9 @@ async def main():
             "use_js_for_crawl": False, "rate_limiter_base_delay_min": 0.4, "rate_limiter_base_delay_max": 1.2,
             "rate_limiter_max_delay": 15.0, "rate_limiter_max_retries": 2, "messages": [], "processing_complete": False,
             "urls_processed": set(), "is_processing": False, "suggested_questions": None, "max_concurrent": 25,
-            "follow_links_recursively": False, "url_include_patterns": "", "url_exclude_patterns": ""
+            "follow_links_recursively": False,
+            "check_robots_txt": False, # Initialize check_robots_txt here
+            "url_include_patterns": "", "url_exclude_patterns": ""
         }.items():
             st.session_state[key] = default_value
         db_stats = get_db_stats()
@@ -264,7 +267,7 @@ async def main():
 
                 if st.session_state.follow_links_recursively:
                     status_placeholder.info(f"Following internal links (max depth: {st.session_state.get('max_depth_discover_links', 2)})...")
-                    discovered_urls = await utils.discover_internal_links(crawl_urls, max_depth=2) # Changed to utils.discover_internal_links
+                    discovered_urls = await discover_internal_links(crawl_urls, max_depth=2) # Call function directly (imported from utils)
                     urls_to_crawl = discovered_urls
                     status_placeholder.success(f"Discovered {len(urls_to_crawl)} URLs.")
                 else:
@@ -272,7 +275,7 @@ async def main():
 
                 if urls_to_crawl:
                     status_placeholder.info(f"Crawling and indexing {len(urls_to_crawl)} pages...")
-                    await utils.crawl_parallel(urls_to_crawl, max_concurrent=st.session_state.max_concurrent) # Changed to utils.crawl_parallel
+                    await crawl_parallel(urls_to_crawl, max_concurrent=st.session_state.max_concurrent) # Call function directly (imported from utils)
                     status_placeholder.success(f"Crawling & indexing complete. Knowledge base updated!")
                     st.session_state.urls_processed.add(normalized_website_url)
                     st.session_state.processing_complete = True
