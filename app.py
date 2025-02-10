@@ -16,7 +16,7 @@ import requests
 import re
 import streamlit as st
 from datetime import datetime, timezone
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from urllib.parse import urlparse, urljoin, urlunparse
 from xml.etree import ElementTree
 from dotenv import load_dotenv
@@ -95,7 +95,7 @@ def chunk_text(t: str, max_chars: int = 5000) -> List[str]:
 #############################
 # OpenAI Embedding
 #############################
-async def get_embedding(text: str) -> List[float]:
+async def get_embedding(text: str) -> Optional[List[float]]: # Return Optional[List[float]]
     try:
         r = await openai_client.embeddings.create(
             model="text-embedding-ada-002",
@@ -103,8 +103,8 @@ async def get_embedding(text: str) -> List[float]:
         )
         return r.data[0].embedding
     except Exception as e:
-        print(f"Embedding error: {e}")
-        return [0.0] * 1536
+        st.error(f"Embedding error: {e}") # Display embedding error in UI
+        return None # Return None on error
 
 def extract_reference_snippet(content: str, query: str, snippet_length: int = 300) -> str:
     query_terms = query.split()
@@ -141,6 +141,8 @@ def retrieve_relevant_documents(query: str, n_matches: int = 5, max_snippet_len:
     """
     # 1. Get embedding for the query
     e = asyncio.run(get_embedding(query))
+    if e is None: # Handle None embedding
+        return "Error generating embedding for the query."
 
     # 2. Supabase RPC to retrieve top N matches
     r = supabase.rpc("match_documents", {
@@ -168,12 +170,12 @@ def retrieve_relevant_documents(query: str, n_matches: int = 5, max_snippet_len:
 
 def get_urls_from_sitemap(u: str) -> List[str]:
     try:
-        r = requests.get(u, stream=True) # stream=True is good practice for large files
+        r = requests.get(u, stream=True, timeout=15) # Added timeout
         r.raise_for_status()
 
         content_type = r.headers.get('Content-Type', '').lower()
         if 'xml' not in content_type and 'text/xml' not in content_type:
-            print(f"Warning: URL {u} does not appear to be an XML sitemap (Content-Type: {content_type}). Skipping XML parsing.")
+            st.warning(f"Warning: URL {u} does not appear to be an XML sitemap (Content-Type: {content_type}). Skipping XML parsing.") # Display warning in UI
             return [] # Return empty list as it's not a sitemap
 
         xml_content = r.content # Now get the actual content if it's likely XML
@@ -182,16 +184,16 @@ def get_urls_from_sitemap(u: str) -> List[str]:
             ns = {"ns": "http://www.sitemaps.org/schemas/sitemap/0.9"}
             return [loc.text.strip() for loc in ro.findall(".//ns:loc", ns)]
         except ElementTree.ParseError as parse_err:
-            print(f"Sitemap XML Parse Error for URL: {u}")
-            print(f"ParseError details: {parse_err}")
+            st.error(f"Sitemap XML Parse Error for URL: {u}") # Display error in UI
+            st.error(f"ParseError details: {parse_err}") # Display error in UI
             # Optionally, print the problematic XML content for debugging
             print("Problematic XML Content (truncated):\n", xml_content[:500].decode('utf-8', errors='ignore'))
             return []
     except requests.exceptions.RequestException as req_err:
-        print(f"Sitemap Request Error for URL: {u}: {req_err}")
+        st.error(f"Sitemap Request Error for URL: {u}: {req_err}") # Display error in UI
         return []
     except Exception as e:
-        print(f"Sitemap General Error for URL: {u}: {e}")
+        st.error(f"Sitemap General Error for URL: {u}: {e}") # Display error in UI
         return []
 
 
@@ -209,15 +211,15 @@ def format_sitemap_url(u: str) -> str:
 #############################
 # Best practice config from docs
 #############################
-def get_run_config(with_js: bool = False) -> CrawlerRunConfig:
+def get_run_config(with_js: bool = False, delay: float = 1.0, word_threshold: int = 50) -> CrawlerRunConfig: # Added delay and word_threshold as params
     kwargs = {
         "cache_mode": CacheMode.BYPASS,
         "stream": False,
         "exclude_external_links": False,
         "wait_for_images": True,
-        "delay_before_return_html": 1.0,
+        "delay_before_return_html": delay, # Configurable delay
         "excluded_tags": ["header", "footer", "nav", "aside"],
-        "word_count_threshold": 50,
+        "word_count_threshold": word_threshold, # Configurable word threshold
         # You could also do "check_robots_txt": True,
     }
     if with_js:
@@ -239,6 +241,10 @@ def extract_title_and_summary_from_markdown(md: str) -> Dict[str, str]:
 async def process_chunk(chunk: str, num: int, url: str) -> Dict[str, Any]:
     ts = extract_title_and_summary_from_markdown(chunk)
     embedding = await get_embedding(ts["summary"])
+    if embedding is None: # Handle None embedding
+        st.warning(f"Skipping chunk {num} from {url} due to embedding error.")
+        return None # Indicate skip
+
     return {
         "id": f"{url}_{num}",
         "url": url,
@@ -256,16 +262,18 @@ async def process_chunk(chunk: str, num: int, url: str) -> Dict[str, Any]:
     }
 
 async def insert_chunk_to_supabase(d: Dict[str, Any]):
+    if d is None: # Handle None chunk data (skipped chunks)
+        return
     try:
         supabase.table("rag_chunks").upsert(d).execute()
     except Exception as e:
-        print(f"Insert error: {e}")
+        st.error(f"Insert error to Supabase: {e}") # Display Supabase insert error in UI
 
 async def process_and_store_document(url: str, md: str):
-    chunks = chunk_text(md)
+    chunks = chunk_text(md, max_chars=st.session_state.chunk_max_chars) # Use configurable chunk size
     tasks = [process_chunk(chunk, i, url) for i, chunk in enumerate(chunks)]
     processed_chunks = await asyncio.gather(*tasks)
-    insert_tasks = [insert_chunk_to_supabase(item) for item in processed_chunks]
+    insert_tasks = [insert_chunk_to_supabase(item) for item in processed_chunks if item is not None] # Filter out None chunks
     await asyncio.gather(*insert_tasks)
 
 #############################
@@ -281,9 +289,13 @@ async def discover_internal_links(start_urls: List[str], max_depth: int = 3) -> 
         verbose=False,
         extra_args=["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox"]
     )
-    run_conf = get_run_config(with_js=False)
+    run_conf = get_run_config(with_js=st.session_state.use_js_for_crawl, delay=st.session_state.crawl_delay, word_threshold=st.session_state.crawl_word_threshold) # Use configurable JS and delay
 
     async with AsyncWebCrawler(config=bc) as crawler:
+        progress_bar = st.progress(0.0) # Progress bar for link discovery
+        total_urls = len(start_urls)
+        urls_processed_count = 0
+
         while queue:
             url, depth = queue.popleft()
             if url in visited or depth > max_depth:
@@ -292,6 +304,9 @@ async def discover_internal_links(start_urls: List[str], max_depth: int = 3) -> 
 
             # BFS approach: just parse links, no storing
             result = await crawler.arun(url=url, config=run_conf)
+            urls_processed_count += 1
+            progress_bar.progress(min(1.0, urls_processed_count / total_urls) if total_urls > 0 else 0.0) # Update progress bar
+
             if result.success:
                 discovered.add(url)
                 links_dict = getattr(result, "links", {})
@@ -303,16 +318,17 @@ async def discover_internal_links(start_urls: List[str], max_depth: int = 3) -> 
                         if abs_url and same_domain(abs_url, url):
                             queue.append((abs_url, depth + 1))
             else:
-                print(f"Link discovery failed: {result.error_message} for URL: {url}") # Added URL to error message
+                st.error(f"Link discovery failed for URL: {url}. Error: {result.error_message}") # Display link discovery error in UI
 
-    return list(discovered)
+        progress_bar.empty() # Remove progress bar when finished
+        return list(discovered)
 
 #############################
 # Parallel Crawl (arun_many)
 #############################
 async def crawl_parallel(urls: List[str], max_concurrent: int = 10):
     if not urls: # Efficient fallback: handle empty URL list
-        print("Warning: crawl_parallel received an empty URL list. Nothing to crawl.")
+        st.warning("Warning: crawl_parallel received an empty URL list. Nothing to crawl.") # Display warning in UI
         return
 
     dispatcher = MemoryAdaptiveDispatcher(
@@ -320,9 +336,9 @@ async def crawl_parallel(urls: List[str], max_concurrent: int = 10):
         check_interval=1.0,
         max_session_permit=max_concurrent,
         rate_limiter=RateLimiter(
-            base_delay=(1.0, 2.0),
-            max_delay=30.0,
-            max_retries=2,
+            base_delay=(st.session_state.rate_limiter_base_delay_min, st.session_state.rate_limiter_base_delay_max), # Configurable rate limiter
+            max_delay=st.session_state.rate_limiter_max_delay, # Configurable rate limiter
+            max_retries=st.session_state.rate_limiter_max_retries, # Configurable rate limiter
             rate_limit_codes=[429, 503]
         ),
         monitor=CrawlerMonitor(
@@ -335,7 +351,11 @@ async def crawl_parallel(urls: List[str], max_concurrent: int = 10):
         verbose=False,
         extra_args=["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox"]
     )
-    run_conf = get_run_config(with_js=False)
+    run_conf = get_run_config(with_js=st.session_state.use_js_for_crawl, delay=st.session_state.crawl_delay, word_threshold=st.session_state.crawl_word_threshold) # Use configurable JS and delay
+
+    progress_bar = st.progress(0.0) # Progress bar for crawling
+    total_urls = len(urls)
+    urls_crawled_count = 0
 
     async with AsyncWebCrawler(config=bc) as crawler:
         results = await crawler.arun_many(
@@ -344,11 +364,14 @@ async def crawl_parallel(urls: List[str], max_concurrent: int = 10):
             dispatcher=dispatcher
         )
         for r in results:
+            urls_crawled_count += 1
+            progress_bar.progress(min(1.0, urls_crawled_count / total_urls) if total_urls > 0 else 0.0) # Update progress bar
             if r.success:
                 md = r.markdown_v2.raw_markdown
                 await process_and_store_document(r.url, md)
             else:
-                print(f"Failed crawling {r.url}: {r.error_message}")
+                st.error(f"Failed crawling {r.url}: {r.error_message}") # Display crawl failure in UI
+    progress_bar.empty() # Remove progress bar when finished
 
 #############################
 # DB & Stats
@@ -375,7 +398,7 @@ def get_db_stats():
         last_updated = dt.strftime("%Y-%m-%d %H:%M:%S %Z")
         return {"urls": list(urls), "domains": list(domains), "doc_count": count, "last_updated": last_updated}
     except Exception as e:
-        print(f"DB Stats error: {e}")
+        st.error(f"DB Stats error: {e}") # Display DB Stats error in UI
         return None
 
 #############################
@@ -414,6 +437,29 @@ async def main():
     st.set_page_config(page_title="Dynamic RAG Chat System (Supabase)", page_icon="🤖", layout="wide")
     init_progress_state()
 
+    # Initialize session state for configurations
+    if "chunk_max_chars" not in st.session_state:
+        st.session_state.chunk_max_chars = 5000
+    if "n_matches" not in st.session_state:
+        st.session_state.n_matches = 5
+    if "max_snippet_len" not in st.session_state:
+        st.session_state.max_snippet_len = 500
+    if "crawl_delay" not in st.session_state:
+        st.session_state.crawl_delay = 1.0
+    if "crawl_word_threshold" not in st.session_state:
+        st.session_state.crawl_word_threshold = 50
+    if "use_js_for_crawl" not in st.session_state:
+        st.session_state.use_js_for_crawl = False
+    if "rate_limiter_base_delay_min" not in st.session_state:
+        st.session_state.rate_limiter_base_delay_min = 1.0
+    if "rate_limiter_base_delay_max" not in st.session_state:
+        st.session_state.rate_limiter_base_delay_max = 2.0
+    if "rate_limiter_max_delay" not in st.session_state:
+        st.session_state.rate_limiter_max_delay = 30.0
+    if "rate_limiter_max_retries" not in st.session_state:
+        st.session_state.rate_limiter_max_retries = 2
+
+
     if "messages" not in st.session_state:
         st.session_state.messages = []
     if "processing_complete" not in st.session_state:
@@ -448,6 +494,22 @@ async def main():
     else:
         st.info("👋 Welcome! Start by adding a website to create your knowledge base.")
 
+    config_expander = st.expander("Advanced Configuration", expanded=False) # Configuration expander
+    with config_expander:
+        st.subheader("Configuration")
+        st.number_input("Chunk Max Characters", min_value=1000, max_value=10000, value=st.session_state.chunk_max_chars, step=500, key="chunk_max_chars", help="Maximum characters per chunk for text splitting.")
+        st.number_input("Retrieval Matches Count", min_value=1, max_value=10, value=st.session_state.n_matches, step=1, key="n_matches", help="Number of documents to retrieve for context.")
+        st.number_input("Max Snippet Length", min_value=100, max_value=1000, value=st.session_state.max_snippet_len, step=50, key="max_snippet_len", help="Maximum length of the reference snippet in chat.")
+        st.checkbox("Use JavaScript for Crawl", value=st.session_state.use_js_for_crawl, key="use_js_for_crawl", help="Enable JavaScript execution during crawling (can be slower).")
+        st.number_input("Crawl Delay (seconds)", min_value=0.0, max_value=5.0, value=st.session_state.crawl_delay, step=0.1, key="crawl_delay", help="Delay between page requests during crawling.")
+        st.number_input("Crawl Word Threshold", min_value=10, max_value=200, value=st.session_state.crawl_word_threshold, step=10, key="crawl_word_threshold", help="Minimum word count for a text block to be considered for indexing.")
+        st.subheader("Rate Limiter Configuration")
+        st.number_input("Rate Limiter Base Delay Min (seconds)", min_value=0.1, max_value=5.0, value=st.session_state.rate_limiter_base_delay_min, step=0.1, key="rate_limiter_base_delay_min", help="Minimum base delay for rate limiter.")
+        st.number_input("Rate Limiter Base Delay Max (seconds)", min_value=0.1, max_value=10.0, value=st.session_state.rate_limiter_base_delay_max, step=0.1, key="rate_limiter_base_delay_max", help="Maximum base delay for rate limiter.")
+        st.number_input("Rate Limiter Max Delay (seconds)", min_value=10.0, max_value=60.0, value=st.session_state.rate_limiter_max_delay, step=5.0, key="rate_limiter_max_delay", help="Maximum delay the rate limiter will reach.")
+        st.number_input("Rate Limiter Max Retries", min_value=1, max_value=5, value=st.session_state.rate_limiter_max_retries, step=1, key="rate_limiter_max_retries", help="Maximum retries for rate-limited requests.")
+
+
     max_concurrent = st.slider("Max concurrent URLs", min_value=1, max_value=50, value=10)
     follow_links_recursively = st.checkbox("Follow links recursively", value=True)
 
@@ -471,36 +533,45 @@ async def main():
             pb = st.button("Process URL", disabled=st.session_state.is_processing)
         with c2:
             if st.button("Clear Database", disabled=st.session_state.is_processing):
-                delete_all_chunks()
-                st.session_state.processing_complete = False
-                st.session_state.urls_processed = set()
-                st.session_state.messages = []
-                st.session_state.suggested_questions = None
-                st.success("Database cleared successfully!")
-                st.rerun()
+                if st.warning("Are you sure you want to clear the database? This action cannot be undone.", type="warning"): # Confirmation for clear DB
+                    delete_all_chunks()
+                    st.session_state.processing_complete = False
+                    st.session_state.urls_processed = set()
+                    st.session_state.messages = []
+                    st.session_state.suggested_questions = None
+                    st.success("Database cleared successfully!")
+                    st.rerun()
 
         if pb and url_input:
             if url_input not in st.session_state.urls_processed:
                 st.session_state.is_processing = True
+                progress_status = st.empty() # Placeholder for status messages during processing
+                progress_status.info("Discovering URLs and starting crawl...") # Initial status
+
                 with st.spinner("Discovery & Parallel Crawl..."):
                     # Try to parse sitemap or fallback
                     fu = pv
                     found = get_urls_from_sitemap(fu)
                     if not found:
-                        print(f"Sitemap not found or empty at {fu}. Falling back to input URL.") # Explicit fallback message
+                        progress_status.warning(f"Sitemap not found or empty at {fu}. Falling back to input URL.") # UI status message
                         found = [url_input] # Efficient fallback: process input URL directly
+                    else:
+                        progress_status.success(f"Sitemap URLs found: {len(found)}") # UI status message
 
-                    print(f"Found URLs from sitemap (or fallback): {found}") # Debug print
 
                     if follow_links_recursively:
                         discovered = await discover_internal_links(found, max_depth=9)
+                        progress_status.success(f"Discovered {len(discovered)} internal URLs.") # UI status message
                     else:
                         discovered = found # If not recursive, just use the initial found URLs
 
-                    print(f"Discovered URLs after link discovery: {discovered}") # Debug print
+                    if discovered:
+                        await crawl_parallel(discovered, max_concurrent=max_concurrent)
+                        progress_status.success(f"Crawling and indexing completed for {len(discovered)} URLs.") # UI status message
+                    else:
+                        progress_status.warning("No URLs to crawl after discovery.") # UI status message
 
-                    await crawl_parallel(discovered, max_concurrent=max_concurrent)
-
+                progress_status.empty() # Clear status message after processing
                 st.session_state.urls_processed.update(discovered)
                 st.session_state.processing_complete = True
                 st.session_state.is_processing = False
@@ -535,7 +606,7 @@ async def main():
                 with st.chat_message("user"):
                     st.markdown(user_query, unsafe_allow_html=True)
                 # Retrieve multiple docs for a better answer
-                combined_context = retrieve_relevant_documents(user_query, n_matches=5, max_snippet_len=600)
+                combined_context = retrieve_relevant_documents(user_query, n_matches=st.session_state.n_matches, max_snippet_len=st.session_state.max_snippet_len) # Use configurable n_matches and snippet length
                 sys = ("You have access to the following context:\n" + combined_context + "\nAnswer the question.")
                 msgs = [
                     {"role": "system", "content": sys},
@@ -564,8 +635,9 @@ async def main():
             st.info("Please process a URL first to start chatting!")
 
     st.markdown("---")
-    if db_stats and db_stats["doc_count"] > 0:
-        st.markdown(f"System Status: 🟢 Ready with {db_stats['doc_count']} documents from {len(db_stats['domains'])} sources")
+    db_stats_display = get_db_stats() # Get stats to display, avoid calling multiple times
+    if db_stats_display and db_stats_display["doc_count"] > 0:
+        st.markdown(f"System Status: 🟢 Ready with {db_stats_display['doc_count']} documents from {len(db_stats_display['domains'])} sources")
     else:
         st.markdown("System Status: 🟡 Waiting for content")
 
