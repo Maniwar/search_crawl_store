@@ -1,8 +1,15 @@
 import nest_asyncio
 nest_asyncio.apply()
 import os
-os.system('playwright install')
-os.system('playwright install-deps')
+import subprocess
+import sys
+
+def install_playwright():
+    subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+    subprocess.run([sys.executable, "-m", "playwright", "install-deps"], check=True)
+
+install_playwright()
+
 import asyncio
 import json
 import requests
