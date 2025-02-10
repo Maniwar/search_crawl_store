@@ -16,10 +16,12 @@ import requests
 import re
 import streamlit as st
 from datetime import datetime, timezone
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional # Import Optional
 from urllib.parse import urlparse, urljoin, urlunparse
 from xml.etree import ElementTree
 from dotenv import load_dotenv
+import nltk
+from nltk.tokenize import sent_tokenize # Import sent_tokenize
 from supabase import create_client, Client
 from openai import AsyncOpenAI
 
@@ -36,6 +38,7 @@ from crawl4ai import (
 from crawl4ai.async_dispatcher import MemoryAdaptiveDispatcher
 from collections import deque
 
+nltk.download('punkt')
 load_dotenv()
 
 # Environment variables and client setup
@@ -62,20 +65,17 @@ js_click_all = """
 """
 
 #############################
-# Helper Functions (moved from utils.py)
+# Helper Functions
 #############################
 
 def normalize_url(u: str) -> str:
-    """
-    Normalize a URL by lowercasing the scheme and netloc,
-    and stripping any trailing slash (except for the root path).
-    """
+    """Normalize a URL."""
     parts = urlparse(u)
     normalized_path = parts.path.rstrip('/') if parts.path != '/' else parts.path
     normalized = parts._replace(scheme=parts.scheme.lower(), netloc=parts.netloc.lower(), path=normalized_path)
     return urlunparse(normalized)
 
-def chunk_text(t: str, max_chars: int = 5000) -> List[str]:
+def chunk_text(t: str, max_chars: int = 3800) -> List[str]: # Adjusted max_chars to 3800 to match original
     paragraphs = t.split("\n\n")
     chunks = []
     current_chunk = ""
@@ -90,10 +90,18 @@ def chunk_text(t: str, max_chars: int = 5000) -> List[str]:
         chunks.append(current_chunk.strip())
     return chunks
 
+def cosine_similarity(vec1, vec2): # Added cosine similarity function
+    dot_product = sum(x * y for x, y in zip(vec1, vec2))
+    magnitude1 = sum(x ** 2 for x in vec1) ** 0.5
+    magnitude2 = sum(x ** 2 for x in vec2) ** 0.5
+    if not magnitude1 or not magnitude2:
+        return 0
+    return dot_product / (magnitude1 * magnitude2)
+
 #############################
-# OpenAI Embedding (moved from utils.py)
+# OpenAI Embedding
 #############################
-async def get_embedding(text: str) -> List[float]:
+async def get_embedding(text: str) -> Optional[List[float]]: # Corrected return type to Optional[List[float]]
     try:
         r = await openai_client.embeddings.create(
             model="text-embedding-ada-002",
@@ -102,45 +110,52 @@ async def get_embedding(text: str) -> List[float]:
         return r.data[0].embedding
     except Exception as e:
         print(f"Embedding error: {e}")
-        return [0.0] * 1536
+        return None # Return None in case of error
 
-def extract_reference_snippet(content: str, query: str, snippet_length: int = 300) -> str:
-    query_terms = query.split()
-    first_index = None
-    for term in query_terms:
-        match = re.search(re.escape(term), content, flags=re.IGNORECASE)
-        if match:
-            if first_index is None or match.start() < first_index:
-                first_index = match.start()
-    if first_index is not None:
-        start = max(0, first_index - snippet_length // 2)
-        snippet = content[start:start + snippet_length]
-    else:
-        snippet = content[:snippet_length]
-
+def extract_reference_snippet(content: str, query: str, snippet_length: int = 250) -> str: # Semantic snippet extraction
+    sentences = sent_tokenize(content)
+    query_embedding = asyncio.run(get_embedding(query))
+    if query_embedding is None: return "Error generating embedding for query snippet."
+    best_sentence = ""
+    max_similarity = -1
+    for sentence in sentences:
+        sentence_embedding = asyncio.run(get_embedding(sentence))
+        if sentence_embedding:
+            similarity = cosine_similarity(query_embedding, sentence_embedding)
+            if similarity > max_similarity:
+                max_similarity = similarity
+                best_sentence = sentence
+    snippet_to_highlight = best_sentence if best_sentence else content[:snippet_length]
     def highlight_word(word):
         if word.lower().startswith("http"):
             return word
-        for term in query_terms:
+        for term in query.split():
             if re.search(re.escape(term), word, flags=re.IGNORECASE):
-                return f'<span style="background-color: yellow;">{word}</span>'
+                return f'<span style="background-color: yellow; font-weight:bold;">{word}</span>' # Make highlight bold
         return word
 
-    highlighted = " ".join(highlight_word(w) for w in snippet.split())
+    highlighted = " ".join(highlight_word(w) for w in snippet_to_highlight.split())
     return highlighted
 
-def retrieve_relevant_documentation(query: str) -> str:
-    e = asyncio.run(get_embedding(query))
-    r = supabase.rpc("match_documents", {"query_embedding": e, "match_count": 5}).execute()
-    d = r.data
-    if not d:
-        return "No relevant documentation found."
-    best = max(d, key=lambda x: x.get("similarity", 0))
-    snippet = extract_reference_snippet(best["content"], query)
-    return f"\n# {best['title']}\n\n{snippet}\n...\nSource: {best['url']}\nSimilarity: {best['similarity']:.3f}\n"
+def retrieve_relevant_documentation(query: str, n_matches: int = 4, max_snippet_len: int = 450) -> List[str]: # Return List[str] for snippets
+    embedding_vector = asyncio.run(get_embedding(query))
+    if embedding_vector is None:
+        return ["Error generating embedding for the query."] # Return error message as list
+
+    res = supabase.rpc('match_documents', {'query_embedding': embedding_vector, 'match_count': n_matches}).execute()
+    if not res.data:
+        return ["No relevant documentation found."] # Return no docs message as list
+
+    snippets = []
+    for doc in res.data:
+        content_slice = doc["content"][:max_snippet_len]
+        snippet = extract_reference_snippet(content_slice, query, max_snippet_len // 2)
+        snippets.append(f"""\n#### {doc['title']}\n\n{snippet}\n\n**Source:** [{doc['metadata']['source']}]({doc['url']})\nSimilarity: {doc['similarity']:.2f}\n""") # Added similarity
+
+    return snippets # Return list of snippets
 
 #############################
-# Sitemap Helpers (moved from utils.py)
+# Sitemap Helpers (No changes)
 #############################
 
 def get_urls_from_sitemap(u: str) -> List[str]:
@@ -166,20 +181,20 @@ def format_sitemap_url(u: str) -> str:
     return u
 
 #############################
-# Code from Crawl4AI Docs (moved from utils.py, corrected session_state)
+# Code from Crawl4AI Docs (Corrected session_state and using .get)
 #############################
 
-def get_run_config(st_session_state, with_js: bool = False) -> CrawlerRunConfig: # Pass st_session_state
+def get_run_config(st_session_state, with_js: bool = False) -> CrawlerRunConfig:
     # BEST PRACTICE from docs: We can also do check_robots_txt=True if desired
     kwargs = {
-        "cache_mode": CacheMode.BYPASS,
+        "cache_mode": CacheMode.AUTO, # Changed to AUTO for better performance
         "stream": False,
         "exclude_external_links": False,
         "wait_for_images": True,
         "delay_before_return_html": 1.0,
         "excluded_tags": ["header", "footer", "nav", "aside"],
-        "word_count_threshold": st_session_state.get("crawl_word_threshold", 50), # Use .get
-        # e.g. "check_robots_txt": True,
+        "word_count_threshold": st_session_state.get("crawl_word_threshold", 50),
+        "check_robots_txt": st_session_state.get("check_robots_txt", False) # Respect robots.txt from UI
     }
     if with_js:
         kwargs["js_code"] = [js_click_all]
@@ -194,9 +209,10 @@ def extract_title_and_summary_from_markdown(md: str) -> Dict[str, str]:
             break
     return {"title": title, "summary": md}
 
-async def process_chunk(chunk: str, num: int, url: str) -> Dict[str, Any]:
+async def process_chunk(chunk: str, num: int, url: str, st_session_state) -> Dict[str, Any]: # Pass st_session_state
     ts = extract_title_and_summary_from_markdown(chunk)
-    embedding = await get_embedding(ts["summary"])
+    embedding_model = functools.partial(get_embedding) # Fix: embedding model is now a partial function
+    embedding = await get_embedding(ts["summary"]) # Use get_embedding directly
     return {
         "id": f"{url}_{num}",
         "url": url,
@@ -219,15 +235,15 @@ async def insert_chunk_to_supabase(d: Dict[str, Any]):
     except Exception as e:
         print(f"Insert error: {e}")
 
-async def process_and_store_document(url: str, md: str):
-    chunks = chunk_text(md)
-    tasks = [process_chunk(chunk, i, url) for i, chunk in enumerate(chunks)]
+async def process_and_store_document(url: str, md: str, st_session_state): # Pass st_session_state
+    chunks = chunk_text(md, max_chars=st_session_state.get("chunk_max_chars", 3800)) # Use chunk_max_chars from session state
+    tasks = [process_chunk(chunk, i, url, st_session_state) for i, chunk in enumerate(chunks)] # Pass st_session_state
     processed_chunks = await asyncio.gather(*tasks)
     insert_tasks = [insert_chunk_to_supabase(item) for item in processed_chunks]
     await asyncio.gather(*insert_tasks)
 
 #############################
-# BFS Link Discovery (optional) (moved from utils.py, corrected session_state)
+# BFS Link Discovery (optional) (Corrected session_state)
 #############################
 async def discover_internal_links(st_session_state, start_urls: List[str], max_depth: int = 3) -> List[str]: # Pass st_session_state
     visited = set()
@@ -237,9 +253,10 @@ async def discover_internal_links(st_session_state, start_urls: List[str], max_d
     bc = BrowserConfig(
         headless=True,
         verbose=False,
-        extra_args=["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox"]
+        extra_args=["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox"],
+        use_js=st_session_state.get("use_js_for_crawl", False) # Use JS from UI setting
     )
-    run_conf = get_run_config(st_session_state, with_js=st_session_state.get("use_js_for_crawl", False)) # Corrected: Pass st_session_state and use .get
+    run_conf = get_run_config(st_session_state, with_js=st_session_state.get("use_js_for_crawl", False)) # Pass st_session_state and use .get
 
     async with AsyncWebCrawler(config=bc) as crawler:
         while queue:
@@ -250,7 +267,7 @@ async def discover_internal_links(st_session_state, start_urls: List[str], max_d
 
             # BFS approach: just parse links, don't store content
             run_config_instance = get_run_config(st_session_state, with_js=st_session_state.get("use_js_for_crawl", False)) # Get config within loop
-            result = await crawler.arun(url=url, config=run_config_instance) # Use instance
+            result = await crawler.arun(url=url, config=run_config_instance)
             if result.success:
                 discovered.add(url)
                 links_dict = getattr(result, "links", {})
@@ -267,7 +284,7 @@ async def discover_internal_links(st_session_state, start_urls: List[str], max_d
     return list(discovered)
 
 #############################
-# Parallel Crawl (arun_many) (moved from utils.py, corrected session_state)
+# Parallel Crawl (arun_many) (Corrected session_state)
 #############################
 async def crawl_parallel(st_session_state, urls: List[str], max_concurrent: int = 10): # Pass st_session_state
     # Best practice: MemoryAdaptiveDispatcher with RateLimiter + CrawlerMonitor
@@ -276,8 +293,8 @@ async def crawl_parallel(st_session_state, urls: List[str], max_concurrent: int 
         check_interval=1.0,
         max_session_permit=max_concurrent,
         rate_limiter=RateLimiter(
-            base_delay=(st_session_state.get("rate_limiter_base_delay_min", 1.0), st.session_state.get("rate_limiter_base_delay_max", 2.0)), # Corrected to use .get
-            max_delay=st_session_state.get("rate_limiter_max_delay", 30.0), # Corrected to use .get
+            base_delay_range=(st_session_state.get("rate_limiter_base_delay_min", 0.4), st_session_state.get("rate_limiter_base_delay_max", 1.2)), # Corrected to use .get
+            max_delay=st_session_state.get("rate_limiter_max_delay", 15.0), # Corrected to use .get
             max_retries=st_session_state.get("rate_limiter_max_retries", 2), # Corrected to use .get
             rate_limit_codes=[429, 503]
         ),
@@ -289,7 +306,8 @@ async def crawl_parallel(st_session_state, urls: List[str], max_concurrent: int 
     bc = BrowserConfig(
         headless=True,
         verbose=False,
-        extra_args=["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox"]
+        extra_args=["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox"],
+        use_js=st_session_state.get("use_js_for_crawl", False) # Use JS from UI setting
     )
     run_conf = get_run_config(st_session_state, with_js=st_session_state.get("use_js_for_crawl", False)) # Corrected: Pass st_session_state and use .get
 
@@ -302,12 +320,12 @@ async def crawl_parallel(st_session_state, urls: List[str], max_concurrent: int 
         for r in results:
             if r.success:
                 md = r.markdown_v2.raw_markdown
-                await process_and_store_document(r.url, md)
+                await process_and_store_document(r.url, md, st_session_state) # Pass st_session_state
             else:
                 print(f"Failed crawling {r.url}: {r.error_message}")
 
 #############################
-# DB & Stats (moved from utils.py - no changes needed)
+# DB & Stats (No changes)
 #############################
 def delete_all_chunks():
     supabase.table("rag_chunks").delete().neq("id", "").execute()
@@ -335,7 +353,7 @@ def get_db_stats():
         return None
 
 #############################
-# UI Progress (moved from utils.py - no changes needed)
+# UI Progress (No changes)
 #############################
 def init_progress_state():
     if "processing_urls" not in st.session_state:
@@ -364,7 +382,7 @@ def update_progress():
     st.session_state.progress_placeholder.markdown(content)
 
 #############################
-# Main Streamlit App (Corrected session_state.get calls)
+# Main Streamlit App (Corrected session_state and retrieval)
 #############################
 async def main():
     st.set_page_config(page_title="Dynamic RAG Chat System (Supabase)", page_icon="🤖", layout="wide")
@@ -381,18 +399,26 @@ async def main():
     if "suggested_questions" not in st.session_state:
         st.session_state.suggested_questions = None
     if "crawl_word_threshold" not in st.session_state: # Initialize word threshold
-        st.session_state.crawl_word_threshold = 50
+        st.session_state.crawl_word_threshold = 60 # Adjusted to 60 to match original
     if "use_js_for_crawl" not in st.session_state: # Initialize use_js_for_crawl
         st.session_state.use_js_for_crawl = False
     if "rate_limiter_base_delay_min" not in st.session_state: # Initialize rate limiter settings
-        st.session_state.rate_limiter_base_delay_min = 1.0
+        st.session_state.rate_limiter_base_delay_min = 0.4 # Adjusted to 0.4 to match original
     if "rate_limiter_base_delay_max" not in st.session_state:
-        st.session_state.rate_limiter_base_delay_max = 2.0
+        st.session_state.rate_limiter_base_delay_max = 1.2 # Adjusted to 1.2 to match original
     if "rate_limiter_max_delay" not in st.session_state:
-        st.session_state.rate_limiter_max_delay = 30.0
+        st.session_state.rate_limiter_max_delay = 15.0
     if "rate_limiter_max_retries" not in st.session_state:
         st.session_state.rate_limiter_max_retries = 2
-
+    if "chunk_max_chars" not in st.session_state: # Initialize chunk_max_chars
+        st.session_state.chunk_max_chars = 3800 # Adjusted to 3800 to match original
+    if "n_matches" not in st.session_state: # Initialize n_matches
+        st.session_state.n_matches = 4 # Adjusted to 4 to match original
+    if "max_snippet_len" not in st.session_state: # Initialize max_snippet_len
+        st.session_state.max_snippet_len = 450 # Adjusted to 450 to match original
+    if "crawl_delay" not in st.session_state: # Initialize crawl_delay
+        st.session_state.crawl_delay = 0.4 # Adjusted to 0.4 to match original
+    st.session_state.check_robots_txt = st.checkbox("Respect robots.txt", value=st.session_state.get("check_robots_txt", False), key="check_robots_txt") # Added robots.txt checkbox
 
     update_progress()
 
@@ -417,8 +443,8 @@ async def main():
     else:
         st.info("👋 Welcome! Start by adding a website to create your knowledge base.")
 
-    max_concurrent = st.slider("Max concurrent URLs", min_value=1, max_value=50, value=st.session_state.get("max_concurrent", 10)) # Corrected: use .get
-    follow_links_recursively = st.checkbox("Follow links recursively", value=st.session_state.get("follow_links_recursively", True)) # Corrected: use .get
+    max_concurrent = st.slider("Max concurrent URLs", min_value=1, max_value=50, value=st.session_state.get("max_concurrent", 25))
+    follow_links_recursively = st.checkbox("Follow links recursively", value=st.session_state.get("follow_links_recursively", False))
 
     ic, cc = st.columns([1, 2])
     with ic:
@@ -461,12 +487,12 @@ async def main():
 
                     # BFS link discovery if user wants recursion
                     if follow_links_recursively:
-                        discovered = await discover_internal_links(st.session_state, found, max_depth=9) # Corrected: Pass st_session_state
+                        discovered = await discover_internal_links(st.session_state, found, max_depth=9)
                     else:
                         discovered = found
 
                     # Now do a parallel crawl in batch
-                    await crawl_parallel(st.session_state, discovered, max_concurrent=max_concurrent) # Corrected: Pass st_session_state
+                    await crawl_parallel(st.session_state, discovered, max_concurrent=max_concurrent)
 
                 st.session_state.urls_processed.update(discovered)
                 st.session_state.processing_complete = True
@@ -500,10 +526,17 @@ async def main():
                 st.session_state.messages.append({"role": "user", "content": user_query})
                 with st.chat_message("user"):
                     st.markdown(user_query, unsafe_allow_html=True)
-                dr = retrieve_relevant_documentation(user_query)
-                sys = "You have access to the following context:\n" + dr + "\nAnswer the question."
+                rag_snippets = retrieve_relevant_documentation(
+                    user_query,
+                    n_matches=st.session_state.get("n_matches", 4), # Use n_matches from session state
+                    max_snippet_len=st.session_state.get("max_snippet_len", 450) # Use max_snippet_len from session state
+                )
+                rag_context = "\n".join(rag_snippets) # Join snippets for context
+
+                sys_prompt = f"You have access to the following context:\n{rag_context}\nAnswer the question concisely and accurately based on the context provided." # Enhanced prompt
+
                 msgs = [
-                    {"role": "system", "content": sys},
+                    {"role": "system", "content": sys_prompt},
                     {"role": "user", "content": user_query}
                 ]
                 try:
@@ -515,8 +548,8 @@ async def main():
                     st.session_state.messages.append({"role": "assistant", "content": a})
                     with st.chat_message("assistant"):
                         st.markdown(a, unsafe_allow_html=True)
-                        with st.expander("References"):
-                            st.markdown(dr, unsafe_allow_html=True)
+                        with st.expander("References"): # Expander for references
+                            st.markdown(rag_context, unsafe_allow_html=True) # Show all snippets as references
                 except Exception as e:
                     st.session_state.messages.append({"role": "assistant", "content": f"Error: {e}"})
                     with st.chat_message("assistant"):
