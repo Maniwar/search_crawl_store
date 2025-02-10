@@ -127,16 +127,16 @@ def retrieve_relevant_documents(query: str, n_matches: int, max_snippet_len: int
         snippets.append(f"""\n#### {doc['title']}\n\n{snippet}\n\n**Source:** [{doc['metadata']['source']}]({doc['url']})\nSimilarity: {doc['similarity']:.2f}""")
     return "\n".join(snippets)
 
-# --- Sitemap Helpers --- (FIX: Assume these are in a utils.py file, import and use utils prefix)
+# --- Sitemap Helpers ---
 import utils
 get_urls_from_sitemap = utils.get_urls_from_sitemap
 format_sitemap_url = utils.format_sitemap_url
 same_domain = utils.same_domain
 
-# --- Optimized Crawler Config --- (FIX: Assume these are in a utils.py file, import and use utils prefix)
+# --- Optimized Crawler Config ---
 get_crawler_config = utils.get_crawler_config
 
-# --- Document Processing & Storage --- (FIX: Assume these are in a utils.py file, import and use utils prefix)
+# --- Document Processing & Storage ---
 extract_title_and_summary_from_markdown = utils.extract_title_and_summary_from_markdown
 process_chunk = utils.process_chunk
 insert_chunk_to_supabase_batch = utils.insert_chunk_to_supabase_batch
@@ -273,7 +273,7 @@ async def main():
 
                 if st.session_state.follow_links_recursively:
                     status_placeholder.info(f"Following internal links (max depth: {st.session_state.get('max_depth_discover_links', 2)})...")
-                    discovered_urls = await discover_internal_links(crawl_urls, max_depth=2) # discover_internal_links is also missing
+                    discovered_urls = await utils.discover_internal_links(crawl_urls, max_depth=2) # Changed to utils.discover_internal_links
                     urls_to_crawl = discovered_urls
                     status_placeholder.success(f"Discovered {len(urls_to_crawl)} URLs.")
                 else:
@@ -281,7 +281,7 @@ async def main():
 
                 if urls_to_crawl:
                     status_placeholder.info(f"Crawling and indexing {len(urls_to_crawl)} pages...")
-                    await crawl_parallel(urls_to_crawl, max_concurrent=st.session_state.max_concurrent) # crawl_parallel is also missing
+                    await utils.crawl_parallel(urls_to_crawl, max_concurrent=st.session_state.max_concurrent) # Changed to utils.crawl_parallel
                     status_placeholder.success(f"Crawling & indexing complete. Knowledge base updated!")
                     st.session_state.urls_processed.add(normalized_website_url)
                     st.session_state.processing_complete = True
