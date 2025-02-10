@@ -143,7 +143,7 @@ def format_sitemap_url(u: str) -> str:
         return u
     parsed = urlparse(u)
     if parsed.path in ("", "/"):
-        return f"{u.rstrip('/')}/sitemap.xml"
+        return f"{u.rstrip('/')}" + "/sitemap.xml"
     return u
 
 def get_run_config(with_js: bool = False) -> CrawlerRunConfig:
@@ -388,7 +388,7 @@ async def main():
             else:
                 parsed = urlparse(url_input)
                 if parsed.path in ("", "/"):
-                    pv = f"{url_input.rstrip('/')}/sitemap.xml"
+                    pv = f"{url_input.rstrip('/')}" + "/sitemap.xml"
                 else:
                     pv = url_input
             st.caption(f"Will try: {pv}")
