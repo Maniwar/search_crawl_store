@@ -62,10 +62,10 @@ if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY or not OPENAI_API_KEY:
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
-# --- JS snippet for Crawl4AI ---
+# --- Define JS snippet for Crawl4AI ---
 js_click_all = """(async () => { const clickable = document.querySelectorAll("a, button"); for (let el of clickable) { try { el.click(); await new Promise(r => setTimeout(r, 300)); } catch(e) {} } })();"""
 
-# --- Helper Functions --- (No changes)
+# --- Helper Functions ---
 def normalize_url(u: str) -> str:
     parts = urlparse(u)
     normalized_path = parts.path.rstrip('/') if parts.path != '/' else parts.path
@@ -161,7 +161,7 @@ def get_crawler_config(st_session_state) -> CrawlerRunConfig:
     rate_limiter = RateLimiter(
         base_delay_range=(st_session_state.get("rate_limiter_base_delay_min", 0.4), st_session_state.get("rate_limiter_base_delay_max", 1.2)),
         max_delay=st_session_state.get("rate_limiter_max_delay", 15.0),
-        max_retries=st_session_state.get("rate_limiter_max_retries", 2)
+        max_retries=st.session_state.get("rate_limiter_max_retries", 2)
     )
     crawler_config = CrawlerRunConfig(
         browser_config=browser_config,
@@ -201,7 +201,7 @@ def get_db_stats():
         doc_count = res_docs.count if res_docs else 0
         res_domains = supabase.table("rag_chunks").select("metadata->>source").execute()
         domains = set(item.get('metadata', {}).get('source') and urlparse(item['metadata']['source']).netloc for item in res_domains.data if item.get('metadata') and item['metadata'].get('source'))
-        last_updated = next((datetime.fromisoformat(item['created_at'].replace('Z', '+00:00')).strftime('%Y-%m-%d %H:%M:%S UTC') for item in supabase.table('rag_chunks').select('created_at').order('created_at', desc=True).limit(1).execute().data if item.get('created_at')), None)
+        last_updated = next((datetime.fromisoformat(item['created_at'].replace('Z', '+00:00')).strftime('%Y-%m-%d %H:%M:%S UTC') for item in supabase.table("rag_chunks").select('created_at').order('created_at', desc=True).limit(1).execute().data if item.get('created_at')), None)
         return {"doc_count": doc_count, "domains": list(domains), "last_updated": last_updated}
     except Exception as e:
         print(f"DB Stats error: {e}")
@@ -322,16 +322,28 @@ async def main():
     st.set_page_config(page_title="Dynamic RAG Chat System (Supabase)", page_icon="🤖", layout="wide")
     init_progress_state()
 
-    if "initial_setup_done" not in st.session_state:
-        for key, default_value in {
-            "chunk_max_chars": 3800, "n_matches": 4, "max_snippet_len": 450, "crawl_delay": 0.4, "crawl_word_threshold": 60,
-            "use_js_for_crawl": False, "rate_limiter_base_delay_min": 0.4, "rate_limiter_base_delay_max": 1.2,
-            "rate_limiter_max_delay": 15.0, "rate_limiter_max_retries": 2, "messages": [], "processing_complete": False,
-            "urls_processed": set(), "is_processing": False, "suggested_questions": None, "max_concurrent": 25,
-            "follow_links_recursively": False, "check_robots_txt": False, "url_include_patterns": "", "url_exclude_patterns": ""
-        }.items():
-            st.session_state[key] = default_value
-        st.session_state.initial_setup_done = True
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+    if "processing_complete" not in st.session_state:
+        st.session_state.processing_complete = False
+    if "urls_processed" not in st.session_state:
+        st.session_state.urls_processed = set()
+    if "is_processing" not in st.session_state:
+        st.session_state.is_processing = False
+    if "suggested_questions" not in st.session_state:
+        st.session_state.suggested_questions = None
+    if "crawl_word_threshold" not in st.session_state:
+        st.session_state.crawl_word_threshold = 50
+    if "use_js_for_crawl" not in st.session_state:
+        st.session_state.use_js_for_crawl = False
+    if "rate_limiter_base_delay_min" not in st.session_state:
+        st.session_state.rate_limiter_base_delay_min = 1.0
+    if "rate_limiter_base_delay_max" not in st.session_state:
+        st.session_state.rate_limiter_base_delay_max = 2.0
+    if "rate_limiter_max_delay" not in st.session_state:
+        st.session_state.rate_limiter_max_delay = 15.0
+    if "rate_limiter_max_retries" not in st.session_state:
+        st.session_state.rate_limiter_max_retries = 2
 
     update_progress()
 
@@ -339,14 +351,24 @@ async def main():
     db_stats = get_db_stats()
     if db_stats and db_stats["doc_count"] > 0: st.success("💡 System is ready with existing knowledge base (Supabase)!")
 
-    with st.sidebar: # --- Configuration Sidebar ---
+    if st.session_state.processing_complete and (db_stats := get_db_stats()):
+        st.success(f"Knowledge base ready ({db_stats['doc_count']} docs, {len(db_stats['domains'])} sources)!")
+        if st.expander("Knowledge Base Stats", expanded=False):
+            st.markdown(f"""**Documents**: {db_stats['doc_count']}\n**Sources**: {len(db_stats['domains'])}
+**Last updated**: {db_stats['last_updated']}\n\n**Sources:**\n{', '.join(db_stats['domains'])}""")
+    else:
+        st.info("👋 Add website URLs to build your knowledge base.")
+
+    with st.sidebar:
         st.header("Configuration")
-        st.session_state.max_concurrent = st.slider("Concurrent URLs", 1, 50, value=st.session_state.get("max_concurrent", 25), step=5, help="Concurrent URLs")
-        st.checkbox("Follow Links Recursively", value=st.session_state.get("follow_links_recursively", False), key="checkbox_follow_links_recursive_value", help="Follow internal links", on_change=functools.partial(update_follow_links_recursively))
+        st.session_state.max_concurrent = st.slider("Concurrent URLs", 1, 50, value=st.session_state.get("max_concurrent", 25), step=5, help="Number of URLs to crawl in parallel for speed.")
+        st.checkbox("Follow Links Recursively", value=st.session_state.get("follow_links_recursively", False), key="checkbox_follow_links_recursive_value", help="Crawl internal links recursively.", on_change=update_follow_links_recursively)
         with st.expander("Advanced Settings"):
-            st.session_state.chunk_max_chars = st.number_input("Chunk Size (Characters)", 1000, 8000, value=st.session_state.get("chunk_max_chars", 3800), step=500, help="Chunk size")
-            st.session_state.crawl_delay = st.slider("Crawl Delay (Seconds)", 0.0, 3.0, value=st.session_state.get("crawl_delay", 0.4), step=0.1, format="%.1f", help="Crawl delay")
-            st.session_state.crawl_word_threshold = st.slider("Word Threshold", 10, 150, value=st.session_state.get("crawl_word_threshold", 60), step=10, help="Word threshold")
+            st.session_state.chunk_max_chars = st.number_input("Chunk Size (Characters)", 1000, 8000, value=st.session_state.get("chunk_max_chars", 3800, step=500), help="Text chunk size for processing.")
+            st.session_state.n_matches = st.slider("Retrieval Matches (Chat)", 1, 7, value=st.session_state.get("n_matches", 4), step=1, help="Number of documents retrieved for chat context.")
+            st.session_state.max_snippet_len = st.slider("Snippet Length (Chat)", 100, 1200, value=st.session_state.get("max_snippet_len", 450), step=100, help="Snippet length in chat.")
+            st.session_state.crawl_delay = st.slider("Crawl Delay (Seconds)", 0.0, 3.0, value=st.session_state.get("crawl_delay", 0.4), step=0.1, format="%.1f", help="Delay between requests.")
+            st.session_state.crawl_word_threshold = st.slider("Word Threshold (Indexing)", 10, 150, value=st.session_state.get("crawl_word_threshold", 60), step=10, help="Min words for indexing text.")
             st.checkbox("Enable JavaScript Rendering", value=st.session_state.get("use_js_for_crawl", False), key="checkbox_use_js_for_crawl_value", help="JS rendering", on_change=update_use_js_crawl)
             st.subheader("Rate Limiter")
             st.session_state.rate_limiter_base_delay_min = st.slider("Base Delay (Min Sec)", 0.1, 3.0, value=st.session_state.get("rate_limiter_base_delay_min", 0.4), step=0.1, format="%.1f")
@@ -354,9 +376,9 @@ async def main():
             st.session_state.rate_limiter_max_delay = st.slider("Max Delay (Sec)", 5.0, 45.0, value=st.session_state.get("rate_limiter_max_delay", 15.0), step=5.0, format="%.0f")
             st.session_state.rate_limiter_max_retries = st.slider("Max Retries", 1, 4, value=st.session_state.get("rate_limiter_max_retries", 2), step=1)
             st.subheader("Crawl Rules")
-            st.checkbox("Respect robots.txt", value=st.session_state.get("check_robots_txt", False), key="check_robots_txt", help="Robots.txt compliance")
-            st.session_state.url_include_patterns = st.text_area("Include URLs matching pattern (one per line)", value=st.session_state.get("url_include_patterns", ""), height=70, key="url_include_patterns", help="Include patterns")
-            st.session_state.url_exclude_patterns = st.text_area("Exclude URLs matching pattern (one per line)", value=st.session_state.get("url_exclude_patterns", ""), height=70, key="url_exclude_patterns", help="Exclude patterns")
+            st.checkbox("Respect robots.txt", value=st.session_state.get("check_robots_txt", False), key="check_robots_txt", help="Robots.txt")
+            st.session_state.url_include_patterns = st.text_area("Include URLs matching pattern (one per line)", value=st.session_state.get("url_include_patterns", ""), height=70, key="url_include_patterns", help="Include URL patterns")
+            st.session_state.url_exclude_patterns = st.text_area("Exclude URLs matching pattern (one per line)", value=st.session_state.get("url_exclude_patterns", ""), height=70, key="url_exclude_patterns", help="Exclude URL patterns")
         st.button("Clear Knowledge Base", on_click=clear_database_button_callback, disabled=st.session_state.is_processing)
 
     input_col, chat_col = st.columns([1, 2])
@@ -401,7 +423,6 @@ async def main():
                     crawl_urls = filter_urls_by_pattern(crawl_urls, exclude_patterns, exclude=True)
                     status_placeholder.success(f"URLs after exclusion filtering: {len(crawl_urls)}.")
 
-
                 urls_to_crawl = crawl_urls
 
                 if st.session_state.follow_links_recursively:
@@ -442,7 +463,7 @@ async def main():
             if user_question:
                 st.session_state.messages.append({"role": "user", "content": user_question})
                 with st.chat_message("user"): st.markdown(user_question, unsafe_allow_html=True)
-                rag_context = retrieve_relevant_documentation(user_question, n_matches=st.session_state.get("n_matches", 4), max_snippet_len=st.session_state.get("max_snippet_len", 450))
+                rag_context = retrieve_relevant_documentation(user_question)
                 rag_prompt_enhanced = f"Context:\n{rag_context}\n\nQuestion: {user_question}\n\nAnswer:"
                 messages_openai = [{"role": "system", "content": "Answer user questions concisely and accurately based on the context provided."}, {"role": "user", "content": rag_prompt_enhanced}]
 
@@ -452,7 +473,8 @@ async def main():
                     st.session_state.messages.append({"role": "assistant", "content": ai_answer})
                     with st.chat_message("assistant"):
                         st.markdown(ai_answer, unsafe_allow_html=True)
-                        with st.expander("References"): st.markdown(rag_context, unsafe_allow_html=True)
+                        with st.expander("References"):
+                            st.markdown(rag_context, unsafe_allow_html=True)
                 except Exception as e:
                     st.error(f"Chat interface error: {e}")
                     st.session_state.messages.append({"role": "assistant", "content": "Sorry, I can't answer right now."})
@@ -464,10 +486,8 @@ async def main():
         else: st.info("Process website content to enable chat.")
 
     st.markdown("---")
-    db_stats = get_db_stats()
     if db_stats and db_stats["doc_count"] > 0:
-        status_str = f"**Status:** 🟢 Ready | **Docs:** {db_stats.get('doc_count', 'N/A')} | **Sources:** {len(db_stats.get('domains', []) if db_stats else [])}"
-        st.markdown(status_str)
+        st.markdown(f"**Status:** 🟢 Ready | **Docs:** {db_stats.get('doc_count', 'N/A')} | **Sources:** {len(db_stats.get('domains', []) if db_stats else 'N/A')}")
     else:
         st.markdown("**Status:** 🟡 Waiting for content")
 
