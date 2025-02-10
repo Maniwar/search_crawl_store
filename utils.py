@@ -75,7 +75,7 @@ def get_crawler_config(st_session_state) -> CrawlerRunConfig:
     )
     rate_limiter = RateLimiter(
         base_delay_range=(st_session_state.rate_limiter_base_delay_min, st_session_state.rate_limiter_base_delay_max),
-        max_delay=st_session_state.rate_limiter_max_delay,
+        max_delay=st.session_state.rate_limiter_max_delay,
         max_retries=st_session_state.rate_limiter_max_retries
     )
     crawler_config = CrawlerRunConfig(
