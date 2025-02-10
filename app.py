@@ -43,14 +43,20 @@ nltk_data_path = os.path.join(".", "nltk_data")  # Define local nltk_data direct
 if not os.path.exists(nltk_data_path):
     os.makedirs(nltk_data_path)  # Create directory if it doesn't exist
 
+print(f"NLTK Data Path: {nltk_data_path}") # Debug: Print NLTK data path
+
 try:
     nltk.data.find('tokenizers/punkt')
+    print("NLTK punkt data already found.") # Debug: Indicate punkt data found
 except LookupError:
+    print("NLTK punkt data not found, downloading...") # Debug: Indicate punkt download attempt
     nltk.download('punkt', download_dir=nltk_data_path) # Download punkt to local directory
 
 try:
     nltk.data.find('taggers/punkt_tab') # Changed to taggers/punkt_tab to match error message and be consistent (typo in prev response)
+    print("NLTK punkt_tab data already found.") # Debug: Indicate punkt_tab data found
 except LookupError:
+    print("NLTK punkt_tab data not found, downloading...") # Debug: Indicate punkt_tab download attempt
     nltk.download('punkt_tab', download_dir=nltk_data_path) # Download punkt_tab to local directory
 
 os.environ['NLTK_DATA'] = nltk_data_path # Set NLTK_DATA environment variable
@@ -62,7 +68,7 @@ SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY or not OPENAI_API_KEY:
-    raise ValueError("Please set SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, and OPENAI_API_KEY in your environment.")
+    raise ValueError("Please set SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, and OPENAI_API_KEY in your environment variables.")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
@@ -106,7 +112,7 @@ def chunk_text(t: str, max_chars: int = 3800) -> List[str]: # Reduced chunk size
     return chunks
 
 #############################
-# OpenAI Embedding (Modified extract_reference_snippet) - No Changes
+# OpenAI Embedding (Modified extract_reference_snippet - Highlight color changed to red)
 #############################
 async def get_embedding(text: str) -> List[float]: # No change
     try:
@@ -127,7 +133,7 @@ def cosine_similarity(vec1, vec2): # Added cosine_similarity function
         return 0
     return dot_product / (magnitude1 * magnitude2)
 
-def extract_reference_snippet(content: str, query: str, snippet_length: int = 250) -> str: # Modified
+def extract_reference_snippet(content: str, query: str, snippet_length: int = 250) -> str: # Modified - Highlight color changed to red
     sentences = sent_tokenize(content) # Use sentence tokenizer
     query_embedding = asyncio.run(get_embedding(query)) # Get embedding of the query
     if query_embedding is None: return "Error generating embedding for query snippet."
@@ -141,12 +147,12 @@ def extract_reference_snippet(content: str, query: str, snippet_length: int = 25
                 max_similarity = similarity
                 best_sentence = sentence
     snippet_to_highlight = best_sentence if best_sentence else content[:snippet_length] # Fallback to content slice if no best sentence
-    def highlight_word(word): # Highlighting function (no change)
+    def highlight_word(word): # Highlighting function - changed highlight color to red
         if word.lower().startswith("http"):
             return word
         for term in query.split():
             if re.search(re.escape(term), word, flags=re.IGNORECASE):
-                return f'<span style="background-color: red;">{word}</span>'
+                return f'<span style="background-color: red; color: white; font-weight:bold;">{word}</span>' # Changed to red, white text, bold
         return word
 
     highlighted = " ".join(highlight_word(w) for w in snippet_to_highlight.split())
@@ -161,10 +167,21 @@ def retrieve_relevant_documentation(query: str, n_matches: int = 3, max_snippet_
 
     snippets = []
     for doc in d[:n_matches]: # Use top n_matches documents
+        raw_url = doc['url']
+        print(f"Raw URL from DB: {raw_url}") # Debug print 1: URL from DB
+
         content_slice = doc["content"][:max_snippet_len] # Slice content for snippet extraction
         snippet = extract_reference_snippet(content_slice, query, max_snippet_len // 2) # Extract snippet
-        raw_url = doc['url'] # Get raw URL from doc
-        cleaned_url = normalize_url(unquote(raw_url)) # Clean and normalize URL
+
+        cleaned_url = unquote(raw_url) # Decode URL-encoded characters
+        print(f"URL after unquote: {cleaned_url}") # Debug print 2: After unquote
+
+        cleaned_url = normalize_url(cleaned_url) # Clean and normalize URL
+        print(f"URL after normalize_url: {cleaned_url}") # Debug print 3: After normalize_url
+
+        cleaned_url = cleaned_url.rstrip('%3C/%3E').rstrip('<//>') # Aggressively remove suffix if present
+        print(f"URL after aggressive rstrip: {cleaned_url}") # Debug print 4: After rstrip
+
         snippets.append(f"""\n#### {doc['title']}\n\n{snippet}\n\n**Source:** [{doc['metadata']['source']}]({cleaned_url})\nSimilarity: {doc['similarity']:.2f}""") # Use cleaned_url
 
     return "\n".join(snippets) # Return combined snippets
@@ -547,9 +564,9 @@ async def main():
                         with st.expander("References"): # Expander to show all references
                             st.markdown(rag_context, unsafe_allow_html=True) # Show full RAG context with snippets
                 except Exception as e:
+                    st.error(f"Chat interface error: {e}")
                     st.session_state.messages.append({"role": "assistant", "content": f"Error: {e}"})
-                    with st.chat_message("assistant"):
-                        st.markdown(f"Error: {e}", unsafe_allow_html=True)
+                    st.chat_message("assistant").markdown(f"Error: {e}", unsafe_allow_html=True)
 
             if st.button("Clear Chat History", type="secondary"):
                 st.session_state.messages = []
@@ -559,7 +576,7 @@ async def main():
 
     st.markdown("---")
     if db_stats and db_stats["doc_count"] > 0:
-        st.markdown(f"System Status: 🟢 Ready with {db_stats['doc_count']} documents from {len(db_stats['domains'])}")
+        st.markdown(f"System Status: 🟢 Ready | **Docs:** {status_display_final['doc_count']} | **Sources:** {len(db_stats['domains'])}")
     else:
         st.markdown("**Status:** 🟡 Waiting for content")
 
