@@ -180,9 +180,8 @@ def get_urls_from_sitemap(u: str) -> List[str]:
             print(f"Sitemap XML Parse Error for URL: {u}")
             print(f"ParseError details: {parse_err}")
             # Optionally, print the problematic XML content for debugging
-            # print("Problematic XML Content (truncated):\n", xml_content[:500].decode('utf-8', errors='ignore'))
+            print("Problematic XML Content (truncated):\n", xml_content[:500].decode('utf-8', errors='ignore'))
             return []
-
     except requests.exceptions.RequestException as req_err:
         print(f"Sitemap Request Error for URL: {u}: {req_err}")
         return []
