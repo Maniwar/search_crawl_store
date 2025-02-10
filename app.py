@@ -1,4 +1,4 @@
-import nest_asyncio
+fix Sitemap error: not well-formed (invalid token): line 313, column 37 import nest_asyncio
 nest_asyncio.apply()
 import os
 import subprocess
@@ -170,12 +170,25 @@ def get_urls_from_sitemap(u: str) -> List[str]:
     try:
         r = requests.get(u)
         r.raise_for_status()
-        ro = ElementTree.fromstring(r.content)
-        ns = {"ns": "http://www.sitemaps.org/schemas/sitemap/0.9"}
-        return [loc.text.strip() for loc in ro.findall(".//ns:loc", ns)]
-    except Exception as e:
-        print(f"Sitemap error: {e}")
+        xml_content = r.content
+        try:
+            ro = ElementTree.fromstring(xml_content)
+            ns = {"ns": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+            return [loc.text.strip() for loc in ro.findall(".//ns:loc", ns)]
+        except ElementTree.ParseError as parse_err:
+            print(f"Sitemap XML Parse Error for URL: {u}")
+            print(f"ParseError details: {parse_err}")
+            # Optionally, print the problematic XML content for debugging
+            # print("Problematic XML Content (truncated):\n", xml_content[:500].decode('utf-8', errors='ignore'))
+            return []
+
+    except requests.exceptions.RequestException as req_err:
+        print(f"Sitemap Request Error for URL: {u}: {req_err}")
         return []
+    except Exception as e:
+        print(f"Sitemap General Error for URL: {u}: {e}")
+        return []
+
 
 def same_domain(url1: str, url2: str) -> bool:
     return urlparse(url1).netloc == urlparse(url2).netloc
