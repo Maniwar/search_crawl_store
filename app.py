@@ -421,7 +421,7 @@ def update_progress():
     st.session_state.progress_placeholder.markdown(content)
 
 #############################
-# Main Streamlit App (No Changes - session_state.get already corrected)
+# Main Streamlit App (Review and Fix Fallback Logic)
 #############################
 async def main():
     st.set_page_config(page_title="Dynamic RAG Chat System (Supabase)", page_icon="🤖", layout="wide")
@@ -514,16 +514,23 @@ async def main():
                     # Phase 0: try to get sitemap or fallback
                     fu = pv  # from above
                     print(f"Attempting to fetch sitemap from URL: {fu}") # Debug: log sitemap URL attempt
-                    found = get_urls_from_sitemap(fu)
-                    print(f"URLs found from sitemap: {found}") # Debug: log URLs found
-                    if not found:
-                        found = [url_input]
+                    found_sitemap_urls = get_urls_from_sitemap(fu) # Renamed to be more explicit
+                    print(f"URLs found from sitemap: {found_sitemap_urls}") # Debug: log URLs found
+                    if found_sitemap_urls: # Check if sitemap URLs were found (not just if list is empty/None)
+                        urls_to_crawl = found_sitemap_urls # Use sitemap URLs if available
+                        print("Sitemap URLs found. Proceeding with sitemap URLs.") # Debug log
+                    else:
+                        urls_to_crawl = [url_input] # Fallback to initial URL if no sitemap
+                        print("No valid sitemap URLs found. Falling back to initial URL for crawling.") # Debug log
 
                     # BFS link discovery if user wants recursion
                     if follow_links_recursively:
-                        discovered = await discover_internal_links(st.session_state, found, max_depth=9) # Corrected: Pass st_session_state
+                        print(f"Follow links recursively is enabled. Starting link discovery from: {urls_to_crawl}") # Debug message
+                        discovered = await discover_internal_links(st.session_state, urls_to_crawl, max_depth=9) # Use urls_to_crawl here
+                        print(f"Discovered URLs after recursive link discovery: {len(discovered)}") # Debug message
                     else:
-                        discovered = found
+                        discovered = urls_to_crawl # Use either sitemap urls or initial url directly
+                        print("Follow links recursively is disabled. Using initial URLs (or sitemap URLs if found).") # Debug message
 
                     # Now do a parallel crawl in batch
                     await crawl_parallel(st.session_state, discovered, max_concurrent=max_concurrent, use_js=use_js_for_crawl) # Pass use_js_for_crawl
