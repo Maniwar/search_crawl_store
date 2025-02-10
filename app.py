@@ -22,7 +22,7 @@ from xml.etree import ElementTree
 from dotenv import load_dotenv
 from supabase import create_client, Client
 from openai import AsyncOpenAI
-from nltk.tokenize import sent_tokenize  # Import NLTK sentence tokenizer
+from nltk.tokenize import sent_tokenize
 
 from crawl4ai import (AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMode, RateLimiter, CrawlerMonitor, DisplayMode)
 from crawl4ai.async_dispatcher import MemoryAdaptiveDispatcher
@@ -30,7 +30,7 @@ from collections import deque
 
 load_dotenv()
 
-# --- Setup: Environment variables and clients ---
+# --- Setup: Environment variables and clients --- (No changes)
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
@@ -44,7 +44,7 @@ openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 # --- JS snippet --- (No changes)
 js_click_all = """(async () => { const clickable = document.querySelectorAll("a, button"); for (let el of clickable) { try { el.click(); await new Promise(r => setTimeout(r, 150)); } catch(e) {} } })();"""
 
-# --- Helper Functions --- (normalize_url, chunk_text remain same)
+# --- Helper Functions --- (normalize_url, chunk_text, get_embedding, extract_reference_snippet, cosine_similarity - No changes)
 def normalize_url(u: str) -> str:
     parts = urlparse(u)
     normalized_path = parts.path.rstrip('/') if parts.path != '/' else parts.path
@@ -66,7 +66,7 @@ def chunk_text(t: str, max_chars: int = 3800) -> List[str]:
         chunks.append(current_chunk.strip())
     return chunks
 
-async def get_embedding(text: str) -> Optional[List[float]]: # get_embedding remains same
+async def get_embedding(text: str) -> Optional[List[float]]:
     try:
         response = await openai_client.embeddings.create(model="text-embedding-ada-002", input=text)
         return response.data[0].embedding
@@ -74,38 +74,30 @@ async def get_embedding(text: str) -> Optional[List[float]]: # get_embedding rem
         st.error(f"Embedding error: {error}")
         return None
 
-# --- Optimized Semantic Snippet Extraction ---
 def extract_reference_snippet(content: str, query: str, snippet_length: int = 250) -> str:
-    sentences = sent_tokenize(content) # Tokenize content into sentences
-    query_embedding = asyncio.run(get_embedding(query)) # Get embedding for query
-
-    if query_embedding is None: # Handle embedding error
-        return "Error generating embedding for query snippet."
-
+    sentences = sent_tokenize(content)
+    query_embedding = asyncio.run(get_embedding(query))
+    if query_embedding is None: return "Error generating embedding for query snippet."
     best_sentence = ""
     max_similarity = -1
-
     for sentence in sentences:
         sentence_embedding = asyncio.run(get_embedding(sentence))
-        if sentence_embedding: # Ensure sentence embedding was successful
-            similarity = cosine_similarity(query_embedding, sentence_embedding) # Calculate cosine similarity
+        if sentence_embedding:
+            similarity = cosine_similarity(query_embedding, sentence_embedding)
             if similarity > max_similarity:
                 max_similarity = similarity
                 best_sentence = sentence
-
-    snippet_to_highlight = best_sentence if best_sentence else content[:snippet_length] # Fallback to beginning of content if no sentence found
-
-    def highlight_word(word): # Highlighting function remains the same
+    snippet_to_highlight = best_sentence if best_sentence else content[:snippet_length]
+    def highlight_word(word):
         if word.lower().startswith("http"): return word
         for term in query.split():
             if re.search(re.escape(term), word, flags=re.IGNORECASE):
                 return f'<span style="background-color: yellow; font-weight:bold;">{word}</span>'
         return word
-
     highlighted_snippet = " ".join(highlight_word(word) for word in snippet_to_highlight.split())
     return highlighted_snippet
 
-def cosine_similarity(vec1, vec2): # Cosine similarity calculation function
+def cosine_similarity(vec1, vec2):
     dot_product = sum(x * y for x, y in zip(vec1, vec2))
     magnitude1 = sum(x ** 2 for x in vec1) ** 0.5
     magnitude2 = sum(x ** 2 for x in vec2) ** 0.5
@@ -113,39 +105,92 @@ def cosine_similarity(vec1, vec2): # Cosine similarity calculation function
         return 0
     return dot_product / (magnitude1 * magnitude2)
 
-# --- Optimized RAG retrieval --- (No changes needed)
-retrieve_relevant_documents = retrieve_relevant_documents # No changes needed
+# --- Optimized RAG retrieval --- (No changes)
+retrieve_relevant_documents = retrieve_relevant_documents
 
-# --- Sitemap Helpers --- (No changes needed)
-get_urls_from_sitemap = get_urls_from_sitemap # No changes needed
-format_sitemap_url = format_sitemap_url # No changes needed
-same_domain = same_domain # No changes needed
+# --- Sitemap Helpers --- (No changes)
+get_urls_from_sitemap = get_urls_from_sitemap
+format_sitemap_url = format_sitemap_url
+same_domain = same_domain
 
-# --- Optimized Crawler Config --- (No changes needed)
-get_crawler_config = get_crawler_config # No changes needed
+# --- Optimized Crawler Config - Robots.txt, URL patterns added ---
+def get_crawler_config(use_js: bool, crawl_delay: float, word_threshold: int, check_robots: bool, url_patterns: Optional[List[str]] = None, exclude_patterns: Optional[List[str]] = None) -> CrawlerRunConfig:
+    return CrawlerRunConfig(
+        cache_mode=CacheMode.BYPASS, stream=False, exclude_external_links=True, wait_for_images=False,
+        delay_before_return_html=crawl_delay, excluded_tags=["header", "footer", "nav", "aside", "script", "style", "noscript"],
+        word_count_threshold=word_threshold, js_code=[js_click_all] if use_js else None, monitor=CrawlerMonitor(display_mode=DisplayMode.SILENT),
+        check_robots_txt=check_robots, url_patterns_include=url_patterns, url_patterns_exclude=exclude_patterns # Added robots, include/exclude patterns
+    )
 
-# --- Document Processing & Storage --- (No changes needed)
-extract_title_and_summary_from_markdown = extract_title_and_summary_from_markdown # No changes needed
-process_chunk = process_chunk # No changes needed
-insert_chunk_to_supabase_batch = insert_chunk_to_supabase_batch # No changes needed
-process_and_store_document = process_and_store_document # No changes needed
+# --- Document Processing & Storage --- (No changes)
+extract_title_and_summary_from_markdown = extract_title_and_summary_from_markdown
+process_chunk = process_chunk
+insert_chunk_to_supabase_batch = insert_chunk_to_supabase_batch
+process_and_store_document = process_and_store_document
 
-# --- Optimized Crawling Functions --- (No changes needed)
-crawl_parallel = crawl_parallel # No changes needed
-discover_internal_links = discover_internal_links # No changes needed
+# --- Optimized Crawling Functions - Robots.txt, URL patterns integrated ---
+async def crawl_parallel(urls: List[str], max_concurrent: int):
+    if not urls:
+        st.warning("crawl_parallel: No URLs to crawl.")
+        return
 
-# --- Database and Stats Functions --- (No changes needed)
-delete_all_chunks = delete_all_chunks # No changes needed
-get_db_stats = get_db_stats # No changes needed
+    dispatcher = MemoryAdaptiveDispatcher(
+        memory_threshold_percent=85.0, check_interval=0.8, max_session_permit=max_concurrent,
+        rate_limiter=RateLimiter(base_delay=(st.session_state.rate_limiter_base_delay_min, st.session_state.rate_limiter_base_delay_max),
+                                 max_delay=st.session_state.rate_limiter_max_delay, max_retries=st.session_state.rate_limiter_max_retries, rate_limit_codes=[429, 503]),
+        monitor=CrawlerMonitor(display_mode=DisplayMode.SILENT)
+    )
+    browser_config = BrowserConfig(headless=True, verbose=False, extra_args=["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox"])
+    crawler_config = get_crawler_config(st.session_state.use_js_for_crawl, st.session_state.crawl_delay, st.session_state.crawl_word_threshold, st.session_state.check_robots_txt, st.session_state.url_include_patterns, st.session_state.url_exclude_patterns) # Robots, patterns passed
 
-# --- UI Progress functions --- (No changes needed)
-init_progress_state = init_progress_state # No changes needed
-add_processing_url = add_processing_url # No changes needed
-remove_processing_url = remove_processing_url # No changes needed
-update_progress = update_progress # No changes needed
+    progress_bar = st.progress(0)
+    for index, result in enumerate(AsyncWebCrawler(config=browser_config).arun_many(urls=urls, config=crawler_config, dispatcher=dispatcher), 1):
+        progress_bar.progress(int((index / len(urls)) * 100) if urls else 0)
+        if result.success:
+            await process_and_store_document(result.url, result.markdown_v2.raw_markdown)
+        else:
+            st.error(f"Crawl failed for {result.url}: {result.error_message}")
+    progress_bar.empty()
 
-# --- Main Streamlit App --- (No changes needed)
-async def main(): # No changes needed
+async def discover_internal_links(start_urls: List[str], max_depth: int = 2) -> List[str]:
+    browser_config = BrowserConfig(headless=True, verbose=False, extra_args=["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox"])
+    crawler_config = get_crawler_config(st.session_state.use_js_for_crawl, st.session_state.crawl_delay, st.session_state.crawl_word_threshold, st.session_state.check_robots_txt, st.session_state.url_include_patterns, st.session_state.url_exclude_patterns) # Robots, patterns passed
+    discovered_urls = set()
+    crawl_queue = deque([(url, 0) for url in start_urls])
+    visited_urls = set()
+    progress_bar = st.progress(0)
+    processed_count = 0
+    total_count = len(start_urls)
+
+    async with AsyncWebCrawler(config=browser_config) as crawler:
+        while crawl_queue:
+            url, depth = crawl_queue.popleft()
+            if url in visited_urls or depth > max_depth: continue
+            visited_urls.add(url)
+
+            crawl_result = await crawler.arun(url=url, config=crawler_config)
+            processed_count += 1
+            progress_bar.progress(int((processed_count / total_count) * 100) if total_count > 0 else 0)
+
+            if crawl_result.success:
+                discovered_urls.add(url)
+                for link in crawl_result.links.get('internal', []):
+                    absolute_url = urljoin(url, link.get('href', ''))
+                    if absolute_url and same_domain(absolute_url, url) and absolute_url not in visited_urls:
+                        crawl_queue.append((absolute_url, depth + 1))
+            else:
+                st.error(f"Discovery failed for {url}: {crawl_result.error_message}")
+        progress_bar.empty()
+    return list(discovered_urls)
+
+# --- Database and Stats Functions --- (No changes)
+delete_all_chunks, get_db_stats = delete_all_chunks, get_db_stats
+
+# --- UI Progress functions --- (No changes)
+init_progress_state, add_processing_url, remove_processing_url, update_progress = init_progress_state, add_processing_url, remove_processing_url, update_progress
+
+# --- Main Streamlit App --- (UI Configuration for Robots.txt, URL Patterns)
+async def main():
     st.set_page_config(page_title="Dynamic RAG Chat System", page_icon="🤖", layout="wide", menu_items={'About': "RAG System - Crawl, Store, & Chat"})
 
     if "initial_setup_done" not in st.session_state:
@@ -156,7 +201,7 @@ async def main(): # No changes needed
             "use_js_for_crawl": False, "rate_limiter_base_delay_min": 0.4, "rate_limiter_base_delay_max": 1.2,
             "rate_limiter_max_delay": 15.0, "rate_limiter_max_retries": 2, "messages": [], "processing_complete": False,
             "urls_processed": set(), "is_processing": False, "suggested_questions": None, "max_concurrent": 25,
-            "follow_links_recursively": False
+            "follow_links_recursively": False, "check_robots_txt": False, "url_include_patterns": "", "url_exclude_patterns": "" # Added robots, URL patterns to session state
         }.items():
             st.session_state[key] = default_value
         db_stats = get_db_stats()
@@ -169,8 +214,8 @@ async def main(): # No changes needed
 
     st.title("Dynamic RAG Chat System")
     if st.session_state.processing_complete and (db_stats := get_db_stats()):
-        st.success(f"Knowledge base ready! ({db_stats['doc_count']} docs, {len(db_stats['domains'])} sources)!")
-        if st.expander("Knowledge Base Stats", expanded=False):
+        st.success(f"Knowledge base ready ({db_stats['doc_count']} docs, {len(db_stats['domains'])} sources)!")
+        if st.expander("Knowledge Base Stats"):
             st.markdown(f"""**Documents**: {db_stats['doc_count']}\n**Sources**: {len(db_stats['domains'])}
 **Last updated**: {db_stats['last_updated']}\n\n**Sources:**\n{', '.join(db_stats['domains'])}""")
     else:
@@ -186,26 +231,31 @@ async def main(): # No changes needed
             st.session_state.max_snippet_len = st.slider("Snippet Length (Chat)", 100, 1200, value=st.session_state.max_snippet_len, step=100, help="Length of reference snippets in chat.")
             st.session_state.crawl_delay = st.slider("Crawl Delay (Seconds)", 0.0, 3.0, value=st.session_state.crawl_delay, step=0.1, format="%.1f", help="Delay between requests to avoid overloading websites.")
             st.session_state.crawl_word_threshold = st.slider("Word Threshold (Indexing)", 10, 150, value=st.session_state.crawl_word_threshold, step=10, help="Minimum words for indexing text blocks.")
-            st.session_state.use_js_for_crawl = st.checkbox("Enable JavaScript Rendering", value=st.session_state.use_js_for_crawl, help="Render dynamic content, but crawling will be slower.")
+            st.session_state.use_js_for_crawl = st.checkbox("Enable JavaScript Rendering", value=st.session_state.use_js_for_crawl, key="use_js_for_crawl", help="Render dynamic content, but crawling will be slower.")
             st.subheader("Rate Limiter")
             st.session_state.rate_limiter_base_delay_min = st.slider("Base Delay (Min Sec)", 0.1, 3.0, value=st.session_state.rate_limiter_base_delay_min, step=0.1, format="%.1f")
             st.session_state.rate_limiter_base_delay_max = st.slider("Base Delay (Max Sec)", 0.1, 7.0, value=st.session_state.rate_limiter_base_delay_max, step=0.1, format="%.1f")
             st.session_state.rate_limiter_max_delay = st.slider("Max Delay (Sec)", 5.0, 45.0, value=st.session_state.rate_limiter_max_delay, step=5.0, format="%.0f")
             st.session_state.rate_limiter_max_retries = st.slider("Max Retries", 1, 4, value=st.session_state.rate_limiter_max_retries, step=1)
+            st.subheader("Crawl Rules") # New section for crawl rules
+            st.session_state.check_robots_txt = st.checkbox("Respect robots.txt", value=st.session_state.check_robots_txt, help="Enable robots.txt compliance (recommended).")
+            st.session_state.url_include_patterns = st.text_area("Include URLs matching pattern (one per line)", value=st.session_state.url_include_patterns, height=70, help="Crawl only URLs that match these patterns (leave empty to include all).")
+            st.session_state.url_exclude_patterns = st.text_area("Exclude URLs matching pattern (one per line)", value=st.session_state.url_exclude_patterns, height=70, help="Exclude URLs that match these patterns (leave empty to exclude none).")
+
         if st.button("Clear Knowledge Base", on_click=delete_all_chunks, disabled=st.session_state.is_processing):
             pass
 
     input_col, chat_col = st.columns([1, 2])
     with input_col:
         st.subheader("Add Website Content")
-        website_url = st.text_input("Enter Website or Sitemap URL", placeholder="https://example.com", help="Input URL to crawl; will attempt to find sitemap.")
+        website_url = st.text_input("Enter Website or Sitemap URL", placeholder="https://example.com", help="Input URL to crawl; will attempt to find sitemap and respect crawl rules.")
         if website_url:
             st.caption(f"Sitemap URL (if found): `{format_sitemap_url(website_url)}`")
         process_website_button = st.button("Process Website Content", disabled=st.session_state.is_processing)
 
         if process_website_button and website_url:
             normalized_website_url = normalize_url(website_url)
-            if normalized_website_url not in set(normalize_url(u) for u in st.session_state.urls_processed):
+            if normalized_website_url not in st.session_state.urls_processed:
                 st.session_state.is_processing = True
                 status_placeholder = st.empty()
                 status_placeholder.info(f"Processing: {normalized_website_url}...")
@@ -213,11 +263,38 @@ async def main(): # No changes needed
                 sitemap_urls = get_urls_from_sitemap(format_sitemap_url(website_url))
                 crawl_urls = sitemap_urls if sitemap_urls else [website_url]
 
+                include_patterns = st.session_state.url_include_patterns.strip().splitlines() if st.session_state.url_include_patterns else None # Get include patterns
+                exclude_patterns = st.session_state.url_exclude_patterns.strip().splitlines() if st.session_state.url_exclude_patterns else None # Get exclude patterns
+
+                def filter_urls_by_pattern(urls_to_filter: List[str], patterns: List[str], exclude=False) -> List[str]: # Filtering function
+                    if not patterns: return urls_to_filter # No patterns, return all
+                    filtered_urls = []
+                    for url_item in urls_to_filter:
+                        for pattern in patterns:
+                            if re.search(pattern, url_item):
+                                if not exclude: # Include logic
+                                    filtered_urls.append(url_item)
+                                break # Match found, move to next URL
+                        else: # No match for exclude logic
+                            if exclude: # Exclude logic
+                                filtered_urls.append(url_item)
+                    return filtered_urls
+
+                if include_patterns: # Apply include patterns if provided
+                    status_placeholder.info("Applying URL inclusion patterns...")
+                    crawl_urls = filter_urls_by_pattern(crawl_urls, include_patterns)
+                    status_placeholder.success(f"URLs after inclusion filtering: {len(crawl_urls)}.")
+                if exclude_patterns: # Apply exclude patterns if provided
+                    status_placeholder.info("Applying URL exclusion patterns...")
+                    crawl_urls = filter_urls_by_pattern(crawl_urls, exclude_patterns, exclude=True) # Exclude=True for exclusion
+                    status_placeholder.success(f"URLs after exclusion filtering: {len(crawl_urls)}.")
+
+
                 if st.session_state.follow_links_recursively:
                     status_placeholder.info(f"Following internal links (max depth: {st.session_state.get('max_depth_discover_links', 2)})...")
                     discovered_urls = await discover_internal_links(crawl_urls, max_depth=2)
                     urls_to_crawl = discovered_urls
-                    status_placeholder.success(f"Discovered {len(urls_to_crawl)} URLs.")
+                    status_placeholder.success(f"Discovered {len(urls_to_crawl)} internal URLs.")
                 else:
                     status_placeholder.info("Recursive link following: OFF")
 
@@ -225,16 +302,16 @@ async def main(): # No changes needed
                     status_placeholder.info(f"Crawling and indexing {len(urls_to_crawl)} pages...")
                     await crawl_parallel(urls_to_crawl, max_concurrent=st.session_state.max_concurrent)
                     status_placeholder.success(f"Crawling & indexing complete. Knowledge base updated!")
-                    st.session_state.urls_processed.update(urls_to_crawl)
+                    st.session_state.urls_processed.add(normalized_website_url) # Use normalized URL
                     st.session_state.processing_complete = True
                 else:
-                    status_placeholder.warning("No URLs found to crawl.")
+                    status_placeholder.warning("No URLs found to crawl after filtering.")
 
                 status_placeholder.empty()
                 st.session_state.is_processing = False
                 st.rerun()
             else:
-                st.warning("This URL has already been processed. Add a new one!")
+                st.warning("This URL has already been processed. Please add a new URL.")
 
         if st.session_state.urls_processed:
             st.subheader("Processed URLs")
@@ -289,5 +366,5 @@ async def main(): # No changes needed
 
 if __name__ == "__main__":
     import nltk
-    nltk.download('punkt') # Download punkt tokenizer for sentence splitting
+    nltk.download('punkt')
     asyncio.run(main())
