@@ -1,8 +1,8 @@
 import nest_asyncio
 nest_asyncio.apply()
 import os
-os.system("sudo playwright install chromium")
-os.system("sudo playwright install-deps chromium")
+os.system(sudo 'playwright install chromium')
+os.system(sudo 'playwright install-deps chromium')
 import asyncio
 import json
 import requests
