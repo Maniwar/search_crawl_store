@@ -26,11 +26,20 @@ from nltk.tokenize import sent_tokenize
 from supabase import create_client, Client
 from openai import AsyncOpenAI
 
-from crawl4ai import (AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMode, RateLimiter, CrawlerMonitor, DisplayMode)
+# Advanced imports for Crawl4AI, dispatchers, and rate limiting
+from crawl4ai import (
+    AsyncWebCrawler,
+    BrowserConfig,
+    CrawlerRunConfig,
+    CacheMode,
+    RateLimiter,
+    CrawlerMonitor,
+    DisplayMode
+)
 from crawl4ai.async_dispatcher import MemoryAdaptiveDispatcher
 from collections import deque
 
-# NLTK data path setup
+# NLTK data path setup (using local directory for persistence)
 nltk_data_path = os.path.join(".", "nltk_data")
 if not os.path.exists(nltk_data_path): os.makedirs(nltk_data_path)
 nltk.data.path.append(nltk_data_path)
@@ -47,7 +56,7 @@ SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY or not OPENAI_API_KEY:
-    st.error("Please set SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, and OPENAI_API_KEY in your environment variables.")
+    st.error("Please set API keys in environment variables.")
     st.stop()
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
@@ -56,7 +65,7 @@ openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 # --- JS snippet for Crawl4AI ---
 js_click_all = """(async () => { const clickable = document.querySelectorAll("a, button"); for (let el of clickable) { try { el.click(); await new Promise(r => setTimeout(r, 300)); } catch(e) {} } })();"""
 
-# --- Helper Functions ---
+# --- Helper Functions --- (No changes)
 def normalize_url(u: str) -> str:
     parts = urlparse(u)
     normalized_path = parts.path.rstrip('/') if parts.path != '/' else parts.path
@@ -107,7 +116,7 @@ def extract_reference_snippet(content: str, query: str, snippet_length: int = 25
         return word
     highlighted_snippet = " ".join(highlight_word(word) for word in snippet_to_highlight.split())
     return highlighted_snippet
-def retrieve_relevant_documentation(query: str, n_matches: int = 3, max_snippet_len: int = 400) -> str:
+def retrieve_relevant_documents(query: str, n_matches: int = 3, max_snippet_len: int = 400) -> str:
     e = asyncio.run(get_embedding(query))
     r = supabase.rpc("match_documents", {"query_embedding": e, "match_count": n_matches * 2}).execute()
     d = r.data
@@ -126,7 +135,7 @@ def get_urls_from_sitemap(sitemap_url: str) -> List[str]:
         response.raise_for_status()
         root = ElementTree.fromstring(response.content)
         namespace = {'ns': 'http://www.sitemaps.org/schemas/sitemap/0.9'}
-        for url_element in root.findall('ns:url/ns:loc', namespace):
+        for url_element in root.findall(".//ns:loc", namespace): # Corrected XPath
             urls.append(url_element.text.strip())
     except requests.exceptions.RequestException as e:
         print(f"Error fetching sitemap: {e}")
@@ -152,13 +161,13 @@ def get_crawler_config(st_session_state) -> CrawlerRunConfig:
     rate_limiter = RateLimiter(
         base_delay_range=(st_session_state.get("rate_limiter_base_delay_min", 0.4), st_session_state.get("rate_limiter_base_delay_max", 1.2)),
         max_delay=st_session_state.get("rate_limiter_max_delay", 15.0),
-        max_retries=st.session_state.get("rate_limiter_max_retries", 2)
+        max_retries=st_session_state.get("rate_limiter_max_retries", 2)
     )
     crawler_config = CrawlerRunConfig(
         browser_config=browser_config,
         cache_mode=CacheMode.AUTO,
         rate_limiter=rate_limiter,
-        crawler_monitor=CrawlerMonitor(display_mode=DisplayMode.SILENT)
+        crawler_monitor=CrawlerMonitor(display_mode=DisplayMode.STREAMLIT) # Changed to STREAMLIT for UI monitor
     )
     return crawler_config
 
@@ -183,14 +192,14 @@ async def process_and_store_document(url: str, content: str, metadata: dict, chu
                        if len(chunk.split()) > crawl_word_threshold and (chunk_info := await process_chunk(url, i, chunk, metadata, embedding_model))]
     if processed_chunks: await insert_chunk_to_supabase_batch(processed_chunks)
 
-# --- Database and Stats Functions ---
+# --- Database and Stats Functions --- (No changes)
 def delete_all_chunks():
     supabase.table("rag_chunks").delete().neq("id", "").execute()
 def get_db_stats():
     try:
-        res_docs = supabase.table('rag_chunks').select('id', count='exact').execute()
+        res_docs = supabase.table("rag_chunks").select("id, url, metadata").execute()
         doc_count = res_docs.count if res_docs else 0
-        res_domains = supabase.table('rag_chunks').select('metadata->>source').execute()
+        res_domains = supabase.table("rag_chunks").select("metadata->>source").execute()
         domains = set(item.get('metadata', {}).get('source') and urlparse(item['metadata']['source']).netloc for item in res_domains.data if item.get('metadata') and item['metadata'].get('source'))
         last_updated = next((datetime.fromisoformat(item['created_at'].replace('Z', '+00:00')).strftime('%Y-%m-%d %H:%M:%S UTC') for item in supabase.table('rag_chunks').select('created_at').order('created_at', desc=True).limit(1).execute().data if item.get('created_at')), None)
         return {"doc_count": doc_count, "domains": list(domains), "last_updated": last_updated}
@@ -198,7 +207,7 @@ def get_db_stats():
         print(f"DB Stats error: {e}")
         return None
 
-# --- UI Progress functions ---
+# --- UI Progress functions --- (No changes)
 def init_progress_state():
     if "processing_urls" not in st.session_state: st.session_state.processing_urls = []
     if "progress_placeholder" not in st.session_state: st.session_state.progress_placeholder = st.sidebar.empty()
@@ -235,7 +244,7 @@ def update_progress():
         content = "### URLs in Queue:\n" + "\n".join(f"- {url}" for url in unique_urls)
         st.session_state.progress_placeholder.markdown(content)
 
-# --- Callback functions for UI elements ---
+# --- Callback functions for UI elements --- (No changes)
 def update_use_js_crawl():
     st.session_state.use_js_for_crawl = st.session_state.checkbox_use_js_for_crawl_value
 def update_follow_links_recursively():
@@ -243,7 +252,7 @@ def update_follow_links_recursively():
 def clear_database_button_callback():
     delete_all_chunks()
 
-# --- Crawling Functions ---
+# --- Crawling Functions --- (No changes)
 async def discover_internal_links(st_session_state, start_urls: List[str], max_depth: int = 2) -> Set[str]:
     crawler_config = get_crawler_config(st_session_state)
     crawler = AsyncWebCrawler(crawler_config=crawler_config)
@@ -392,6 +401,7 @@ async def main():
                     crawl_urls = filter_urls_by_pattern(crawl_urls, exclude_patterns, exclude=True)
                     status_placeholder.success(f"URLs after exclusion filtering: {len(crawl_urls)}.")
 
+
                 urls_to_crawl = crawl_urls
 
                 if st.session_state.follow_links_recursively:
@@ -454,8 +464,10 @@ async def main():
         else: st.info("Process website content to enable chat.")
 
     st.markdown("---")
+    db_stats = get_db_stats()
     if db_stats and db_stats["doc_count"] > 0:
-        st.markdown(f"**Status:** 🟢 Ready | **Docs:** {db_stats.get('doc_count', 'N/A')} | **Sources:** {len(db_stats.get('domains', [])) if db_stats else 'N/A'}")
+        status_str = f"**Status:** 🟢 Ready | **Docs:** {db_stats.get('doc_count', 'N/A')} | **Sources:** {len(db_stats.get('domains', []) if db_stats else [])}"
+        st.markdown(status_str)
     else:
         st.markdown("**Status:** 🟡 Waiting for content")
 
