@@ -6,3 +6,4 @@ supabase
 python-dotenv
 openai
 crawl4ai
+nltk
