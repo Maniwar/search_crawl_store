@@ -7,3 +7,4 @@ python-dotenv
 openai
 crawl4ai
 nltk
+markdown
