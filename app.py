@@ -4,11 +4,11 @@ import os
 import subprocess
 import sys
 
+# Install Playwright without requiring sudo.
 def install_playwright():
     subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
 
 install_playwright()
-
 
 import asyncio
 import json
@@ -34,6 +34,7 @@ from crawl4ai import (
     DisplayMode
 )
 from crawl4ai.async_dispatcher import MemoryAdaptiveDispatcher
+from collections import deque
 
 load_dotenv()
 
@@ -208,32 +209,43 @@ async def process_and_store_document(url: str, md: str):
     insert_tasks = [insert_chunk_to_supabase(item) for item in processed_chunks]
     await asyncio.gather(*insert_tasks)
 
-# --- UI Progress Widget (Sidebar) ---
+# --- Discovery BFS (One pass to gather all internal links) ---
+async def discover_internal_links(start_urls: List[str], max_depth: int = 3) -> List[str]:
+    visited = set()
+    discovered = set()
+    queue = deque((url, 0) for url in start_urls)
 
-def init_progress_state():
-    if "processing_urls" not in st.session_state:
-        st.session_state.processing_urls = []
-    if "progress_placeholder" not in st.session_state:
-        st.session_state.progress_placeholder = st.sidebar.empty()
+    bc = BrowserConfig(
+        headless=True,
+        verbose=False,
+        extra_args=["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox"]
+    )
+    run_conf = get_run_config(with_js=False)
 
-def add_processing_url(url: str):
-    norm_url = normalize_url(url)
-    if norm_url not in st.session_state.processing_urls:
-        st.session_state.processing_urls.append(norm_url)
-    update_progress()
+    async with AsyncWebCrawler(config=bc) as crawler:
+        while queue:
+            url, depth = queue.popleft()
+            if url in visited or depth > max_depth:
+                continue
+            visited.add(url)
+            # Optionally: add_processing_url(url)
+            result = await crawler.arun(url=url, config=run_conf)
+            if result.success:
+                discovered.add(url)
+                links_dict = getattr(result, "links", {})
+                internal_links = links_dict.get("internal", [])
+                for link_obj in internal_links:
+                    href = link_obj.get("href")
+                    if href:
+                        abs_url = urljoin(url, href)
+                        if abs_url and same_domain(abs_url, url):
+                            queue.append((abs_url, depth + 1))
+            else:
+                print(f"Link discovery failed: {result.error_message}")
 
-def remove_processing_url(url: str):
-    norm_url = normalize_url(url)
-    if norm_url in st.session_state.processing_urls:
-        st.session_state.processing_urls.remove(norm_url)
-    update_progress()
+    return list(discovered)
 
-def update_progress():
-    unique_urls = list(dict.fromkeys(st.session_state.get("processing_urls", [])))
-    content = "### Currently Processing URLs:\n" + "\n".join(f"- {url}" for url in unique_urls)
-    st.session_state.progress_placeholder.markdown(content)
-
-# --- Advanced Parallel Crawling ---
+# --- Parallel Crawl ---
 async def crawl_parallel(urls: List[str], max_concurrent: int = 10):
     dispatcher = MemoryAdaptiveDispatcher(
         memory_threshold_percent=90.0,
@@ -252,7 +264,8 @@ async def crawl_parallel(urls: List[str], max_concurrent: int = 10):
     )
     bc = BrowserConfig(
         headless=True,
-        verbose=False
+        verbose=False,
+        extra_args=["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox"]
     )
     run_conf = get_run_config(with_js=False)
     async with AsyncWebCrawler(config=bc) as crawler:
@@ -268,53 +281,6 @@ async def crawl_parallel(urls: List[str], max_concurrent: int = 10):
             else:
                 print(f"Failed crawling {r.url}: {r.error_message}")
 
-# --- Recursive Crawl with Global Concurrency Limit ---
-async def recursive_crawl(url: str, max_depth: int = 9, current_depth: int = 0, 
-                          processed: set = None, sema: asyncio.Semaphore = None):
-    if processed is None:
-        processed = set()
-    if sema is None:
-        sema = asyncio.Semaphore(10)  # Global concurrency limit of 10
-    if current_depth > max_depth or url in processed:
-        return
-    processed.add(url)
-    norm_url = normalize_url(url)
-    add_processing_url(norm_url)
-    try:
-        await asyncio.sleep(1)
-        async with sema:
-            dispatcher = MemoryAdaptiveDispatcher(
-                memory_threshold_percent=85.0,
-                check_interval=1.0,
-                max_session_permit=5,
-                monitor=None
-            )
-            bc = BrowserConfig(
-                headless=True,
-                verbose=False,
-                extra_args=["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox"]
-            )
-            run_conf = get_run_config(with_js=False)
-            async with AsyncWebCrawler(config=bc) as crawler:
-                result = await crawler.arun(url=url, config=run_conf)
-                if result.success:
-                    print(f"Crawled: {url} (depth {current_depth})")
-                    md = result.markdown_v2.raw_markdown
-                    await process_and_store_document(url, md)
-                    links_dict = getattr(result, "links", {})
-                    internal_links = links_dict.get("internal", [])
-                    tasks = []
-                    for link in internal_links:
-                        href = link.get("href")
-                        absolute_url = urljoin(url, href) if href else None
-                        if absolute_url and same_domain(absolute_url, url) and absolute_url not in processed:
-                            tasks.append(recursive_crawl(absolute_url, max_depth, current_depth + 1, processed, sema))
-                    if tasks:
-                        await asyncio.gather(*tasks)
-                else:
-                    print(f"Error crawling {url}: {result.error_message}")
-    finally:
-        remove_processing_url(norm_url)
 
 def delete_all_chunks():
     supabase.table("rag_chunks").delete().neq("id", "").execute()
@@ -342,10 +308,39 @@ def get_db_stats():
         return None
 
 # --- Main Streamlit App ---
+# --- UI Progress Widget (Sidebar) ---
+def init_progress_state():
+    if "processing_urls" not in st.session_state:
+        st.session_state.processing_urls = []
+    if "progress_placeholder" not in st.session_state:
+        st.session_state.progress_placeholder = st.sidebar.empty()
+
+
+def add_processing_url(url: str):
+    norm_url = normalize_url(url)
+    if norm_url not in st.session_state.processing_urls:
+        st.session_state.processing_urls.append(norm_url)
+    update_progress()
+
+
+def remove_processing_url(url: str):
+    norm_url = normalize_url(url)
+    if norm_url in st.session_state.processing_urls:
+        st.session_state.processing_urls.remove(norm_url)
+    update_progress()
+
+
+def update_progress():
+    unique_urls = list(dict.fromkeys(st.session_state.get("processing_urls", [])))
+    content = "### Currently Processing URLs:
+" + "
+".join(f"- {url}" for url in unique_urls)
+    st.session_state.progress_placeholder.markdown(content)
+
 async def main():
     st.set_page_config(page_title="Dynamic RAG Chat System (Supabase)", page_icon="🤖", layout="wide")
     init_progress_state()  # Initialize sidebar state
-    
+
     if "messages" not in st.session_state:
         st.session_state.messages = []
     if "processing_complete" not in st.session_state:
@@ -356,15 +351,15 @@ async def main():
         st.session_state.is_processing = False
     if "suggested_questions" not in st.session_state:
         st.session_state.suggested_questions = None
-    
+
     update_progress()  # Initial update
-    
+
     st.title("Dynamic RAG Chat System (Supabase)")
     db_stats = get_db_stats()
     if db_stats and db_stats["doc_count"] > 0:
         st.session_state.processing_complete = True
         st.session_state.urls_processed = set(db_stats["urls"])
-    
+
     if db_stats and db_stats["doc_count"] > 0:
         st.success("💡 System is ready with existing knowledge base (Supabase)!")
         with st.expander("Knowledge Base Information", expanded=True):
@@ -379,10 +374,10 @@ async def main():
 """)
     else:
         st.info("👋 Welcome! Start by adding a website to create your knowledge base.")
-    
+
     max_concurrent = st.slider("Max concurrent URLs", min_value=1, max_value=50, value=10)
     follow_links_recursively = st.checkbox("Follow links recursively", value=True)
-    
+
     ic, cc = st.columns([1, 2])
     with ic:
         st.subheader("Add Content to RAG System")
@@ -413,7 +408,7 @@ async def main():
         if pb and url_input:
             if url_input not in st.session_state.urls_processed:
                 st.session_state.is_processing = True
-                with st.spinner("Crawling & Processing..."):
+                with st.spinner("Discovery & Parallel Crawl..."):
                     if "sitemap.xml" in url_input:
                         found = get_urls_from_sitemap(url_input)
                     else:
@@ -421,12 +416,16 @@ async def main():
                         found = get_urls_from_sitemap(fu)
                         if not found:
                             found = [url_input]
-                    sema = asyncio.Semaphore(max_concurrent)
+                    # Phase 1: discover links
                     if follow_links_recursively:
-                        await recursive_crawl(found[0], max_depth=9, sema=sema)
+                        discovered = await discover_internal_links(found, max_depth=9)
                     else:
-                        await crawl_parallel(found, max_concurrent=max_concurrent)
-                st.session_state.urls_processed.add(url_input)
+                        discovered = found
+
+                    # Phase 2: parallel crawl everything
+                    await crawl_parallel(discovered, max_concurrent=max_concurrent)
+
+                st.session_state.urls_processed.update(discovered)
                 st.session_state.processing_complete = True
                 st.session_state.is_processing = False
                 st.rerun()
