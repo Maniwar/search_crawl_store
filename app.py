@@ -22,6 +22,7 @@ from xml.etree import ElementTree
 from dotenv import load_dotenv
 from supabase import create_client, Client
 from openai import AsyncOpenAI
+import nltk
 
 # Advanced imports for Crawl4AI, dispatchers, and rate limiting
 from crawl4ai import (
