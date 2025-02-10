@@ -2,7 +2,7 @@ import requests
 from urllib.parse import urlparse, urljoin
 from xml.etree import ElementTree
 import asyncio
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Set
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMode, RateLimiter, CrawlerMonitor, DisplayMode
 from crawl4ai.async_dispatcher import MemoryAdaptiveDispatcher
 from collections import deque
