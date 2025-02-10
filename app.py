@@ -169,9 +169,15 @@ def retrieve_relevant_documents(query: str, n_matches: int = 5, max_snippet_len:
 
 def get_urls_from_sitemap(u: str) -> List[str]:
     try:
-        r = requests.get(u)
+        r = requests.get(u, stream=True) # stream=True is good practice for large files
         r.raise_for_status()
-        xml_content = r.content
+
+        content_type = r.headers.get('Content-Type', '').lower()
+        if 'xml' not in content_type and 'text/xml' not in content_type:
+            print(f"Warning: URL {u} does not appear to be an XML sitemap (Content-Type: {content_type}). Skipping XML parsing.")
+            return [] # Return empty list as it's not a sitemap
+
+        xml_content = r.content # Now get the actual content if it's likely XML
         try:
             ro = ElementTree.fromstring(xml_content)
             ns = {"ns": "http://www.sitemaps.org/schemas/sitemap/0.9"}
