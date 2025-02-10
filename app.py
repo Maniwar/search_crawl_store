@@ -163,7 +163,7 @@ async def main():
             "use_js_for_crawl": False, "rate_limiter_base_delay_min": 0.4, "rate_limiter_base_delay_max": 1.2,
             "rate_limiter_max_delay": 15.0, "rate_limiter_max_retries": 2, "messages": [], "processing_complete": False,
             "urls_processed": set(), "is_processing": False, "suggested_questions": None, "max_concurrent": 25,
-            "follow_links_recursively": False, "check_robots_txt": False, "url_include_patterns": "", "url_exclude_patterns": ""
+            "follow_links_recursively": False, "url_include_patterns": "", "url_exclude_patterns": ""
         }.items():
             st.session_state[key] = default_value
         db_stats = get_db_stats()
