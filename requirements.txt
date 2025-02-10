@@ -1,6 +1,7 @@
-streamlit
-crawl4ai
-pydantic
-supabase
 playwright
+streamlit
 nest_asyncio
+requests
+supabase
+python-dotenv
+openai
