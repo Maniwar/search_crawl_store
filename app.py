@@ -23,6 +23,7 @@ from dotenv import load_dotenv
 from supabase import create_client, Client
 from openai import AsyncOpenAI
 import nltk
+from nltk.tokenize import sent_tokenize
 
 # Advanced imports for Crawl4AI, dispatchers, and rate limiting
 from crawl4ai import (
