@@ -4,11 +4,11 @@ import os
 import subprocess
 import sys
 
-# Install Playwright without requiring sudo.
 def install_playwright():
     subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
 
 install_playwright()
+
 
 import asyncio
 import json
@@ -252,8 +252,7 @@ async def crawl_parallel(urls: List[str], max_concurrent: int = 10):
     )
     bc = BrowserConfig(
         headless=True,
-        verbose=False,
-        extra_args=["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox"]
+        verbose=False
     )
     run_conf = get_run_config(with_js=False)
     async with AsyncWebCrawler(config=bc) as crawler:
@@ -423,13 +422,11 @@ async def main():
                         if not found:
                             found = [url_input]
                     sema = asyncio.Semaphore(max_concurrent)
-                    # Instead of only crawling found[0], gather them all.
                     if follow_links_recursively:
-                        tasks = [recursive_crawl(u, max_depth=9, sema=sema) for u in found]
-                        await asyncio.gather(*tasks)
+                        await recursive_crawl(found[0], max_depth=9, sema=sema)
                     else:
                         await crawl_parallel(found, max_concurrent=max_concurrent)
-                st.session_state.urls_processed.update(found)
+                st.session_state.urls_processed.add(url_input)
                 st.session_state.processing_complete = True
                 st.session_state.is_processing = False
                 st.rerun()
