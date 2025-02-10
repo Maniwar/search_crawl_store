@@ -198,72 +198,65 @@ async def process_and_store_document(doc_url: str, markdown_content: str) -> Non
     valid_chunks = [chunk for chunk in processed_chunks if chunk]
     await insert_chunk_to_supabase_batch(valid_chunks)
 
-# --- Optimized Crawling Functions ---
-async def crawl_parallel(urls: List[str], max_concurrent: int):
-    if not urls:
-        st.warning("crawl_parallel: No URLs to crawl.")
-        return
+# --- Database and Stats Functions ---
+def delete_all_chunks():
+    if st.warning("Are you sure you want to clear the database? This action cannot be undone.", type="warning"):
+        supabase.table("rag_chunks").delete().neq("id", "").execute()
+        st.session_state.messages = []
+        st.session_state.urls_processed = set()
+        st.session_state.processing_complete = False
+        st.session_state.suggested_questions = None
+        st.success("Database cleared successfully!")
+        st.rerun()
 
-    dispatcher = MemoryAdaptiveDispatcher(
-        memory_threshold_percent=85.0, check_interval=0.8, max_session_permit=max_concurrent,
-        rate_limiter=RateLimiter(base_delay=(st.session_state.rate_limiter_base_delay_min, st.session_state.rate_limiter_base_delay_max),
-                                 max_delay=st.session_state.rate_limiter_max_delay, max_retries=st.session_state.rate_limiter_max_retries, rate_limit_codes=[429, 503]),
-        monitor=CrawlerMonitor(display_mode=DisplayMode.SILENT)
-    )
-    browser_config = BrowserConfig(headless=True, verbose=False, extra_args=["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox"])
-    crawler_config = get_crawler_config(st.session_state.use_js_for_crawl, st.session_state.crawl_delay, st.session_state.crawl_word_threshold, st.session_state.check_robots_txt, st.session_state.url_include_patterns, st.session_state.url_exclude_patterns)
+def get_db_stats():
+    try:
+        r = supabase.table("rag_chunks").select("id, url, metadata").execute()
+        d = r.data
+        if not d:
+            return {"urls": [], "domains": [], "doc_count": 0, "last_updated": None}
+        urls = set(x["url"] for x in d)
+        domains = set(x["metadata"].get("source", "") for x in d)
+        count = len(d)
+        lt = [x["metadata"].get("crawled_at", None) for x in d if x["metadata"].get("crawled_at")]
+        if not lt:
+            return {"urls": list(urls), "domains": list(domains), "doc_count": count, "last_updated": None}
+        mx = max(lt)
+        dt = datetime.fromisoformat(mx.replace("Z", "+00:00"))
+        tz = datetime.now().astimezone().tzinfo
+        dt = dt.astimezone(tz)
+        last_updated = dt.strftime("%Y-%m-%d %H:%M:%S %Z")
+        return {"urls": list(urls), "domains": list(domains), "doc_count": count, "last_updated": last_updated}
+    except Exception as e:
+        print(f"DB Stats error: {e}") # Keep print for console debugging
+        st.error(f"DB Stats error: {e}") # Show error in UI as well
+        return None
 
-    progress_bar = st.progress(0)
-    for index, result in enumerate(AsyncWebCrawler(config=browser_config).arun_many(urls=urls, config=crawler_config, dispatcher=dispatcher), 1):
-        progress_bar.progress(int((index / len(urls)) * 100) if urls else 0)
-        if result.success:
-            await process_and_store_document(result.url, result.markdown_v2.raw_markdown)
-        else:
-            st.error(f"Crawl failed for {result.url}: {result.error_message}")
-    progress_bar.empty()
+# --- UI Progress functions ---
+def init_progress_state():
+    if "processing_urls" not in st.session_state:
+        st.session_state.processing_urls = []
+    if "progress_placeholder" not in st.session_state:
+        st.session_state.progress_placeholder = st.sidebar.empty()
 
-async def discover_internal_links(start_urls: List[str], max_depth: int = 2) -> List[str]:
-    browser_config = BrowserConfig(headless=True, verbose=False, extra_args=["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox"])
-    crawler_config = get_crawler_config(st.session_state.use_js_for_crawl, st.session_state.crawl_delay, st.session_state.crawl_word_threshold, st.session_state.check_robots_txt, st.session_state.url_include_patterns, st.session_state.url_exclude_patterns)
-    discovered_urls = set()
-    crawl_queue = deque([(url, 0) for url in start_urls])
-    visited_urls = set()
-    progress_bar = st.progress(0)
-    processed_count = 0
-    total_count = len(start_urls)
+def add_processing_url(url: str):
+    norm_url = normalize_url(url)
+    if norm_url not in st.session_state.processing_urls:
+        st.session_state.processing_urls.append(norm_url)
+    update_progress()
 
-    async with AsyncWebCrawler(config=browser_config) as crawler:
-        while crawl_queue:
-            url, depth = crawl_queue.popleft()
-            if url in visited_urls or depth > max_depth: continue
-            visited_urls.add(url)
+def remove_processing_url(url: str):
+    norm_url = normalize_url(url)
+    if norm_url in st.session_state.processing_urls:
+        st.session_state.processing_urls.remove(norm_url)
+    update_progress()
 
-            crawl_result = await crawler.arun(url=url, config=crawler_config)
-            processed_count += 1
-            progress_bar.progress(int((processed_count / total_count) * 100) if total_count > 0 else 0)
+def update_progress():
+    unique_urls = list(dict.fromkeys(st.session_state.get("processing_urls", [])))
+    content = "### Currently Processing URLs:\n" + "\n".join(f"- {url}" for url in unique_urls)
+    st.session_state.progress_placeholder.markdown(content)
 
-            if crawl_result.success:
-                discovered_urls.add(url)
-                for link in crawl_result.links.get('internal', []):
-                    absolute_url = urljoin(url, link.get('href', ''))
-                    if absolute_url and same_domain(absolute_url, url) and absolute_url not in visited_urls:
-                        crawl_queue.append((absolute_url, depth + 1))
-            else:
-                st.error(f"Discovery failed for {url}: {crawl_result.error_message}")
-        progress_bar.empty()
-        return list(discovered_urls)
-
-# --- Database and Stats Functions --- (No changes)
-delete_all_chunks = delete_all_chunks
-get_db_stats = get_db_stats
-
-# --- UI Progress functions --- (No changes)
-init_progress_state = init_progress_state
-add_processing_url = add_processing_url
-remove_processing_url = remove_processing_url
-update_progress = update_progress
-
-# --- Main Streamlit App --- (No changes)
+# --- Main Streamlit App ---
 async def main():
     st.set_page_config(page_title="Dynamic RAG Chat System", page_icon="🤖", layout="wide", menu_items={'About': "RAG System - Crawl, Store, & Chat"})
 
