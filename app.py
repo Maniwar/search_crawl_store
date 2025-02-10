@@ -1,4 +1,4 @@
-import nest_asyncio
+from issues import nest_asyncio
 nest_asyncio.apply()
 import os
 import subprocess
@@ -188,19 +188,31 @@ def retrieve_relevant_documentation(query: str, n_matches: int = 3, max_snippet_
 
 
 #############################
-# Sitemap Helpers (No Changes)
+# Sitemap Helpers (Fixed get_urls_from_sitemap)
 #############################
 
 def get_urls_from_sitemap(u: str) -> List[str]:
     try:
+        print(f"Fetching sitemap from: {u}") # Debug: Log URL being fetched
         r = requests.get(u)
-        r.raise_for_status()
-        ro = ElementTree.fromstring(r.content)
+        r.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
+        print(f"Sitemap fetched successfully. Status code: {r.status_code}") # Debug: Log status code
+        xml_content = r.content
+        ro = ElementTree.fromstring(xml_content)
         ns = {"ns": "http://www.sitemaps.org/schemas/sitemap/0.9"}
-        return [loc.text.strip() for loc in ro.findall(".//ns:loc", ns)]
-    except Exception as e:
-        print(f"Sitemap error: {e}")
+        urls = [loc.text.strip() for loc in ro.findall(".//ns:loc", ns)]
+        print(f"Found {len(urls)} URLs in sitemap.") # Debug: Log number of URLs found
+        return urls
+    except requests.exceptions.RequestException as e:
+        print(f"Sitemap fetch error for {u}: {e}") # Debug: Detailed request error
         return []
+    except ElementTree.ParseError as e:
+        print(f"Sitemap XML Parse error for {u}: {e}") # Debug: XML parsing error
+        return []
+    except Exception as e:
+        print(f"Sitemap processing error for {u}: {e}") # Debug: General error
+        return []
+
 
 def same_domain(url1: str, url2: str) -> bool:
     return urlparse(url1).netloc == urlparse(url2).netloc
@@ -501,7 +513,9 @@ async def main():
                 with st.spinner("Discovery & Parallel Crawl..."):
                     # Phase 0: try to get sitemap or fallback
                     fu = pv  # from above
+                    print(f"Attempting to fetch sitemap from URL: {fu}") # Debug: log sitemap URL attempt
                     found = get_urls_from_sitemap(fu)
+                    print(f"URLs found from sitemap: {found}") # Debug: log URLs found
                     if not found:
                         found = [url_input]
 
